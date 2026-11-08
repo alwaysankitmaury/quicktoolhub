@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>QuickToolHub - 500+ Free Online Tools for Everyone</title>
-  <meta name="description" content="QuickToolHub offers free online tools: word counter, case converter, JSON formatter, calculators, unit converters, password generator and more. Fast, private and no sign-up.">
+  <meta name="description" content="QuickToolHub offers free online tools organized by category: text utilities, developer tools, calculators, unit converters, security tools and more. Fast, private and no sign-up.">
   <meta name="keywords" content="free online tools, text tools, developer tools, calculators, unit converters, password generator, JSON formatter, QuickToolHub">
   <meta name="author" content="QuickToolHub">
   <meta name="robots" content="index, follow">
@@ -65,6 +65,7 @@
         radial-gradient(60% 60% at 15% 0%, rgba(99,102,241,.18), transparent 70%),
         radial-gradient(50% 50% at 90% 10%, rgba(14,165,233,.14), transparent 70%);
     }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto !important; } }
   </style>
 
   <!-- Tool registry (must load before the main script at the end of <body>) -->
@@ -81,7 +82,7 @@
       </a>
       <div class="flex items-center gap-2 sm:gap-4">
         <a href="index.html" class="text-sm font-medium px-3 py-2 rounded-lg text-slate-600 hover:text-indigo-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:text-indigo-400 dark:hover:bg-slate-800 transition">Home</a>
-        <a href="#tools" class="hidden sm:inline-block text-sm font-medium px-3 py-2 rounded-lg text-slate-600 hover:text-indigo-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:text-indigo-400 dark:hover:bg-slate-800 transition">All Tools</a>
+        <a href="#tools-start" class="hidden sm:inline-block text-sm font-medium px-3 py-2 rounded-lg text-slate-600 hover:text-indigo-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:text-indigo-400 dark:hover:bg-slate-800 transition">All Tools</a>
         <button id="theme-toggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode"
           class="w-10 h-10 inline-flex items-center justify-center rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 transition">
           <i class="fa-solid fa-moon dark:hidden" aria-hidden="true"></i>
@@ -95,22 +96,20 @@
 
     <!-- Hero -->
     <section class="hero-glow border-b border-slate-200 dark:border-slate-800">
-      <div class="max-w-3xl mx-auto px-4 sm:px-6 py-12 sm:py-20 text-center">
+      <div class="max-w-3xl mx-auto px-4 sm:px-6 py-12 sm:py-16 text-center">
         <h1 class="text-3xl sm:text-5xl font-extrabold tracking-tight leading-tight">500+ Free Online Tools for Everyone</h1>
         <p class="mt-4 text-base sm:text-lg text-slate-600 dark:text-slate-400">
-          Fast, simple utilities for text, code, math, conversions and security. Every tool runs right in your browser, so your data stays on your device. No sign-up, no uploads, no fuss.
+          Fast, simple utilities that run right in your browser, so your data stays on your device. No sign-up, no uploads.
         </p>
 
-        <!-- Search -->
         <div class="mt-8 relative max-w-2xl mx-auto">
           <label for="toolSearch" class="sr-only">Search tools</label>
           <i class="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true"></i>
           <input id="toolSearch" type="search" autocomplete="off" spellcheck="false" placeholder="Search tools... e.g. JSON, BMI, password"
-            class="w-full rounded-2xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 pl-11 pr-24 py-4 text-base shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition">
+            class="w-full rounded-2xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 pl-11 pr-20 py-4 text-base shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition">
           <kbd class="hidden sm:inline-block absolute right-4 top-1/2 -translate-y-1/2 text-xs text-slate-400 border border-slate-300 dark:border-slate-600 rounded px-2 py-0.5" aria-hidden="true">Press /</kbd>
         </div>
 
-        <!-- Trust badges -->
         <ul class="mt-6 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-slate-500 dark:text-slate-400">
           <li><i class="fa-solid fa-bolt text-amber-500 mr-1.5" aria-hidden="true"></i>Instant results</li>
           <li><i class="fa-solid fa-lock text-emerald-500 mr-1.5" aria-hidden="true"></i>100% private</li>
@@ -118,6 +117,15 @@
         </ul>
       </div>
     </section>
+
+    <!-- Category navigation pills (sticky under the navbar) -->
+    <div id="pill-bar" class="sticky top-16 z-40 border-b border-slate-200 dark:border-slate-800 bg-slate-50/95 dark:bg-slate-900/95 backdrop-blur">
+      <div class="max-w-6xl mx-auto px-4 sm:px-6 py-3">
+        <nav aria-label="Jump to category">
+          <div id="pill-row" class="relative flex gap-2 overflow-x-auto"></div>
+        </nav>
+      </div>
+    </div>
 
     <div class="max-w-6xl mx-auto px-4 sm:px-6">
 
@@ -127,32 +135,21 @@
         Advertisement
       </div>
 
-      <!-- Tools section -->
-      <section id="tools" class="py-10 scroll-mt-20" aria-label="All tools">
+      <!-- Category sections are rendered here -->
+      <div id="tools-start" class="scroll-mt-36"></div>
+      <div id="sections" class="py-6"></div>
 
-        <!-- Category pills -->
-        <div class="-mx-4 sm:mx-0 px-4 sm:px-0">
-          <div id="pill-row" class="flex gap-2 overflow-x-auto sm:flex-wrap pb-2" role="group" aria-label="Filter by category"></div>
+      <!-- Empty state -->
+      <div id="empty-state" class="hidden text-center py-16">
+        <div class="mx-auto w-16 h-16 rounded-full bg-slate-200 dark:bg-slate-800 text-slate-500 dark:text-slate-400 flex items-center justify-center text-2xl mb-4">
+          <i class="fa-solid fa-magnifying-glass-minus" aria-hidden="true"></i>
         </div>
-
-        <!-- Result count -->
-        <p id="result-count" class="mt-4 mb-5 text-sm text-slate-500 dark:text-slate-400" aria-live="polite"></p>
-
-        <!-- Grid -->
-        <div id="tools-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
-
-        <!-- Empty state -->
-        <div id="empty-state" class="hidden text-center py-16">
-          <div class="mx-auto w-16 h-16 rounded-full bg-slate-200 dark:bg-slate-800 text-slate-500 dark:text-slate-400 flex items-center justify-center text-2xl mb-4">
-            <i class="fa-solid fa-magnifying-glass-minus" aria-hidden="true"></i>
-          </div>
-          <h2 class="text-xl font-bold">No tools found</h2>
-          <p id="empty-message" class="mt-2 text-slate-600 dark:text-slate-400"></p>
-          <button id="clear-filters" type="button" class="mt-5 inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-offset-slate-900 transition">
-            <i class="fa-solid fa-rotate-left text-xs" aria-hidden="true"></i> Clear search &amp; filters
-          </button>
-        </div>
-      </section>
+        <h2 id="empty-title" class="text-xl font-bold">No tools found</h2>
+        <p id="empty-message" class="mt-2 text-slate-600 dark:text-slate-400"></p>
+        <button id="clear-search" type="button" class="mt-5 inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-offset-slate-900 transition">
+          <i class="fa-solid fa-rotate-left text-xs" aria-hidden="true"></i> Clear search
+        </button>
+      </div>
 
       <!-- AdSense Slot (Bottom) -->
       <div id="ad-slot-bottom" class="mb-12 flex items-center justify-center min-h-[90px] rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-600 bg-slate-100/60 dark:bg-slate-800/40 text-xs uppercase tracking-wider text-slate-400 dark:text-slate-500" aria-label="Advertisement">
@@ -203,143 +200,82 @@
       });
       $('year').textContent = new Date().getFullYear();
 
-      /* =====================================================================
-       * Data
-       * =================================================================== */
-      var grid = $('tools-grid');
+      var sectionsEl = $('sections');
       var emptyState = $('empty-state');
-      var emptyMessage = $('empty-message');
-      var countEl = $('result-count');
       var pillRow = $('pill-row');
       var searchInput = $('toolSearch');
 
+      /* =====================================================================
+       * Guard: registry must be loaded
+       * =================================================================== */
       if (typeof ALL_TOOLS === 'undefined' || !Array.isArray(ALL_TOOLS)) {
-        $('empty-state').classList.remove('hidden');
-        $('empty-state').querySelector('h2').textContent = 'Tools could not be loaded';
-        emptyMessage.textContent = 'Please check your connection and reload the page.';
-        $('clear-filters').classList.add('hidden');
+        $('pill-bar').classList.add('hidden');
+        $('empty-title').textContent = 'Tools could not be loaded';
+        $('empty-message').textContent = 'Please check your connection and reload the page.';
+        $('clear-search').classList.add('hidden');
+        emptyState.classList.remove('hidden');
         return;
       }
 
-      var categories = (typeof TOOL_CATEGORIES !== 'undefined' && Array.isArray(TOOL_CATEGORIES)) ? TOOL_CATEGORIES : [];
-
-      // Short pill labels (falls back to the full category name for new categories).
-      var SHORT_LABELS = {
-        'text-utilities': 'Text',
-        'developer-tools': 'Developer',
-        'math-finance': 'Math',
-        'converters': 'Converters',
-        'security-web': 'Security'
+      /* =====================================================================
+       * Group tools strictly by category
+       * =================================================================== */
+      var slugify = function (s) {
+        return String(s).toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
       };
 
-      // Badge colours per category (full class strings so nothing is purged).
-      var BADGE_CLASSES = {
-        'Text Utilities': 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
-        'Developer Tools': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
-        'Math & Finance': 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
-        'Converters': 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300',
-        'Security & Web': 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300'
-      };
-      var BADGE_DEFAULT = 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200';
+      var categories = [];
+      if (typeof TOOL_CATEGORIES !== 'undefined' && Array.isArray(TOOL_CATEGORIES)) {
+        TOOL_CATEGORIES.forEach(function (c) {
+          categories.push({ name: c.name, slug: c.slug || slugify(c.name), icon: c.icon || 'fa-solid fa-folder', tools: [] });
+        });
+      }
+      // Any category used by a tool but missing from TOOL_CATEGORIES still gets its own section.
+      ALL_TOOLS.forEach(function (t) {
+        if (!categories.some(function (c) { return c.name === t.category; })) {
+          categories.push({ name: t.category, slug: slugify(t.category), icon: 'fa-solid fa-folder', tools: [] });
+        }
+      });
+      ALL_TOOLS.forEach(function (t) {
+        var cat = categories.find(function (c) { return c.name === t.category; });
+        if (cat) cat.tools.push(t);
+      });
+      categories = categories.filter(function (c) { return c.tools.length > 0; });
 
-      var PILL_BASE = 'flex-shrink-0 px-4 py-2 rounded-full text-sm font-medium border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 whitespace-nowrap ';
+      /* =====================================================================
+       * Colour palette (full class strings so nothing is purged)
+       * =================================================================== */
+      var PALETTE = [
+        { soft: 'bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-300', badge: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' },
+        { soft: 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-300', badge: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' },
+        { soft: 'bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-300', badge: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' },
+        { soft: 'bg-purple-100 text-purple-600 dark:bg-purple-900/40 dark:text-purple-300', badge: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300' },
+        { soft: 'bg-rose-100 text-rose-600 dark:bg-rose-900/40 dark:text-rose-300', badge: 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300' },
+        { soft: 'bg-sky-100 text-sky-600 dark:bg-sky-900/40 dark:text-sky-300', badge: 'bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300' },
+        { soft: 'bg-teal-100 text-teal-600 dark:bg-teal-900/40 dark:text-teal-300', badge: 'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300' },
+        { soft: 'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/40 dark:text-indigo-300', badge: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300' }
+      ];
+
+      var PILL_BASE = 'flex-shrink-0 inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium border whitespace-nowrap transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ';
       var PILL_ACTIVE = 'bg-indigo-600 border-indigo-600 text-white shadow-sm';
       var PILL_IDLE = 'bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:border-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-300';
 
-      // Precompute a lowercase haystack per tool for fast filtering.
-      var index = ALL_TOOLS.map(function (t) {
-        return {
-          tool: t,
-          haystack: (t.title + ' ' + t.desc + ' ' + t.category + ' ' + (t.keywords || []).join(' ')).toLowerCase()
-        };
-      });
+      var plural = function (n) { return n + (n === 1 ? ' Tool' : ' Tools'); };
 
       /* =====================================================================
-       * State (synced to the URL so filters are shareable / back-button friendly)
+       * Builders
        * =================================================================== */
-      var params = new URLSearchParams(window.location.search);
-      var state = {
-        category: 'all',   // category slug or 'all'
-        query: (params.get('q') || '').trim()
-      };
-      var requestedCategory = (params.get('category') || '').trim().toLowerCase();
-      if (requestedCategory && categories.some(function (c) { return c.slug === requestedCategory; })) {
-        state.category = requestedCategory;
-      }
-      searchInput.value = state.query;
-
-      function syncUrl() {
-        var p = new URLSearchParams();
-        if (state.category !== 'all') p.set('category', state.category);
-        if (state.query) p.set('q', state.query);
-        var qs = p.toString();
-        try {
-          history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : '') + window.location.hash);
-        } catch (e) {}
-      }
-
-      /* =====================================================================
-       * Pills
-       * =================================================================== */
-      var pillButtons = [];
-
-      function buildPills() {
-        var items = [{ slug: 'all', label: 'All', count: ALL_TOOLS.length }];
-        categories.forEach(function (c) {
-          var count = ALL_TOOLS.filter(function (t) { return t.category === c.name; }).length;
-          if (count > 0) items.push({ slug: c.slug, label: SHORT_LABELS[c.slug] || c.name, count: count });
-        });
-
-        items.forEach(function (it) {
-          var b = document.createElement('button');
-          b.type = 'button';
-          b.dataset.slug = it.slug;
-          b.textContent = it.label + ' ';
-          var c = document.createElement('span');
-          c.className = 'opacity-70 text-xs';
-          c.textContent = '(' + it.count + ')';
-          b.appendChild(c);
-          b.addEventListener('click', function () {
-            state.category = it.slug;
-            render();
-          });
-          pillRow.appendChild(b);
-          pillButtons.push(b);
-        });
-      }
-
-      function updatePills() {
-        pillButtons.forEach(function (b) {
-          var active = b.dataset.slug === state.category;
-          b.className = PILL_BASE + (active ? PILL_ACTIVE : PILL_IDLE);
-          b.setAttribute('aria-pressed', active ? 'true' : 'false');
-        });
-      }
-
-      /* =====================================================================
-       * Cards
-       * =================================================================== */
-      function buildCard(t) {
+      function buildCard(t, palette) {
         var a = document.createElement('a');
         a.href = 'tool.html?tool=' + encodeURIComponent(t.id);
         a.className = 'group flex flex-col h-full p-5 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-sm hover:shadow-md hover:-translate-y-0.5 hover:border-indigo-400 dark:hover:border-indigo-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 transition';
 
-        var top = document.createElement('div');
-        top.className = 'flex items-start justify-between gap-3';
-
         var iconWrap = document.createElement('span');
-        iconWrap.className = 'flex-shrink-0 w-12 h-12 rounded-xl bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-300 group-hover:bg-indigo-600 group-hover:text-white flex items-center justify-center text-xl transition';
+        iconWrap.className = 'w-12 h-12 rounded-xl flex items-center justify-center text-xl ' + palette.soft;
         var icon = document.createElement('i');
         icon.className = t.icon;
         icon.setAttribute('aria-hidden', 'true');
         iconWrap.appendChild(icon);
-
-        var badge = document.createElement('span');
-        badge.className = 'text-[11px] font-semibold px-2.5 py-1 rounded-full ' + (BADGE_CLASSES[t.category] || BADGE_DEFAULT);
-        badge.textContent = t.category;
-
-        top.appendChild(iconWrap);
-        top.appendChild(badge);
 
         var h3 = document.createElement('h3');
         h3.className = 'mt-4 text-lg font-bold group-hover:text-indigo-600 dark:group-hover:text-indigo-300 transition';
@@ -357,73 +293,194 @@
         arrow.setAttribute('aria-hidden', 'true');
         cta.appendChild(arrow);
 
-        a.appendChild(top);
+        a.appendChild(iconWrap);
         a.appendChild(h3);
         a.appendChild(p);
         a.appendChild(cta);
         return a;
       }
 
-      /* =====================================================================
-       * Filter + render
-       * =================================================================== */
-      function categoryNameFor(slug) {
-        var c = categories.find(function (x) { return x.slug === slug; });
-        return c ? c.name : null;
-      }
+      var groups = [];   // { cat, palette, section, badge, pill, entries: [{tool, el, haystack}] }
 
-      function render() {
-        var catName = state.category === 'all' ? null : categoryNameFor(state.category);
-        var terms = state.query.toLowerCase().split(/\s+/).filter(Boolean);
+      categories.forEach(function (cat, idx) {
+        var palette = PALETTE[idx % PALETTE.length];
+        var sectionId = 'cat-' + cat.slug;
 
-        var matches = index.filter(function (entry) {
-          if (catName && entry.tool.category !== catName) return false;
-          for (var i = 0; i < terms.length; i++) {
-            if (entry.haystack.indexOf(terms[i]) === -1) return false;
-          }
-          return true;
-        }).map(function (e) { return e.tool; });
+        // Section
+        var section = document.createElement('section');
+        section.id = sectionId;
+        section.className = 'scroll-mt-36 mb-12';
+        section.setAttribute('aria-labelledby', sectionId + '-title');
 
-        grid.textContent = '';
-        var frag = document.createDocumentFragment();
-        matches.forEach(function (t) { frag.appendChild(buildCard(t)); });
-        grid.appendChild(frag);
+        var head = document.createElement('div');
+        head.className = 'flex flex-wrap items-center gap-3 mb-5 pb-3 border-b border-slate-200 dark:border-slate-800';
 
-        var has = matches.length > 0;
-        grid.classList.toggle('hidden', !has);
-        emptyState.classList.toggle('hidden', has);
+        var iconBox = document.createElement('span');
+        iconBox.className = 'w-11 h-11 rounded-xl flex items-center justify-center text-lg ' + palette.soft;
+        var ci = document.createElement('i');
+        ci.className = cat.icon;
+        ci.setAttribute('aria-hidden', 'true');
+        iconBox.appendChild(ci);
 
-        if (has) {
-          countEl.textContent = 'Showing ' + matches.length + ' of ' + ALL_TOOLS.length + ' tools' +
-            (catName ? ' in ' + catName : '') + (state.query ? ' matching \u201C' + state.query + '\u201D' : '');
-        } else {
-          countEl.textContent = '0 tools found';
-          emptyMessage.textContent = state.query
-            ? 'We couldn\u2019t find anything for \u201C' + state.query + '\u201D' + (catName ? ' in ' + catName : '') + '. Try a different keyword or category.'
-            : 'There are no tools in this category yet. Check back soon!';
-        }
+        var h2 = document.createElement('h2');
+        h2.id = sectionId + '-title';
+        h2.className = 'text-xl sm:text-2xl font-bold tracking-tight';
+        h2.textContent = cat.name;
 
-        updatePills();
-        syncUrl();
-      }
+        var badge = document.createElement('span');
+        badge.className = 'text-xs font-semibold px-3 py-1 rounded-full ' + palette.badge;
+        badge.textContent = plural(cat.tools.length);
 
-      /* =====================================================================
-       * Events
-       * =================================================================== */
-      searchInput.addEventListener('input', function () {
-        state.query = searchInput.value.trim();
-        render();
+        head.appendChild(iconBox);
+        head.appendChild(h2);
+        head.appendChild(badge);
+
+        var grid = document.createElement('div');
+        grid.className = 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4';
+
+        var entries = cat.tools.map(function (t) {
+          var el = buildCard(t, palette);
+          grid.appendChild(el);
+          return {
+            tool: t,
+            el: el,
+            haystack: (t.title + ' ' + t.desc + ' ' + t.category + ' ' + (t.keywords || []).join(' ')).toLowerCase()
+          };
+        });
+
+        section.appendChild(head);
+        section.appendChild(grid);
+        sectionsEl.appendChild(section);
+
+        // Pill
+        var pill = document.createElement('a');
+        pill.href = '#' + sectionId;
+        var pi = document.createElement('i');
+        pi.className = cat.icon + ' text-xs';
+        pi.setAttribute('aria-hidden', 'true');
+        var pt = document.createElement('span');
+        pt.textContent = cat.name;
+        var pc = document.createElement('span');
+        pc.className = 'text-xs opacity-70';
+        pc.textContent = '(' + cat.tools.length + ')';
+        pill.appendChild(pi);
+        pill.appendChild(pt);
+        pill.appendChild(pc);
+        pillRow.appendChild(pill);
+
+        groups.push({ cat: cat, palette: palette, section: section, badge: badge, pill: pill, pillCount: pc, entries: entries, visible: cat.tools.length });
       });
 
-      $('clear-filters').addEventListener('click', function () {
-        state.query = '';
-        state.category = 'all';
+      /* =====================================================================
+       * Active pill (scroll-spy)
+       * =================================================================== */
+      var activeGroup = null;
+
+      function setActive(group) {
+        activeGroup = group;
+        groups.forEach(function (g) {
+          var on = g === group;
+          g.pill.className = PILL_BASE + (on ? PILL_ACTIVE : PILL_IDLE);
+          if (on) g.pill.setAttribute('aria-current', 'true'); else g.pill.removeAttribute('aria-current');
+        });
+        if (group && !group.pill.classList.contains('hidden')) {
+          var target = group.pill.offsetLeft - (pillRow.clientWidth - group.pill.offsetWidth) / 2;
+          pillRow.scrollTo({ left: Math.max(0, target), behavior: 'smooth' });
+        }
+      }
+
+      var spyQueued = false;
+      function spy() {
+        spyQueued = false;
+        var current = null;
+        for (var i = 0; i < groups.length; i++) {
+          var g = groups[i];
+          if (g.section.classList.contains('hidden')) continue;
+          if (!current) current = g;                       // default: first visible section
+          if (g.section.getBoundingClientRect().top <= 160) current = g;
+        }
+        if (current !== activeGroup) setActive(current);
+      }
+      function queueSpy() {
+        if (!spyQueued) { spyQueued = true; requestAnimationFrame(spy); }
+      }
+      window.addEventListener('scroll', queueSpy, { passive: true });
+      window.addEventListener('resize', queueSpy);
+
+      // Pill clicks: smooth-scroll (also keeps the URL hash in sync).
+      groups.forEach(function (g) {
+        g.pill.addEventListener('click', function (e) {
+          e.preventDefault();
+          g.section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          try { history.replaceState(null, '', window.location.pathname + window.location.search + '#' + g.section.id); } catch (err) {}
+          setActive(g);
+        });
+      });
+
+      /* =====================================================================
+       * Live search: filters cards, hides empty category rows
+       * =================================================================== */
+      var currentQuery = '';
+
+      function applyFilter() {
+        var terms = currentQuery.toLowerCase().split(/\s+/).filter(Boolean);
+        var totalVisible = 0;
+
+        groups.forEach(function (g) {
+          var count = 0;
+          g.entries.forEach(function (e) {
+            var match = true;
+            for (var i = 0; i < terms.length; i++) {
+              if (e.haystack.indexOf(terms[i]) === -1) { match = false; break; }
+            }
+            e.el.classList.toggle('hidden', !match);
+            if (match) count++;
+          });
+          g.visible = count;
+          totalVisible += count;
+
+          g.section.classList.toggle('hidden', count === 0);
+          g.pill.classList.toggle('hidden', count === 0);
+          g.pillCount.textContent = '(' + count + ')';
+          g.badge.textContent = terms.length && count !== g.cat.tools.length
+            ? count + ' of ' + plural(g.cat.tools.length)
+            : plural(g.cat.tools.length);
+        });
+
+        var none = totalVisible === 0;
+        emptyState.classList.toggle('hidden', !none);
+        sectionsEl.classList.toggle('hidden', none);
+        if (none) {
+          $('empty-message').textContent = 'We couldn\u2019t find anything for \u201C' + currentQuery + '\u201D. Try a different keyword.';
+        }
+
+        activeGroup = null;
+        spy();
+      }
+
+      searchInput.addEventListener('input', function () {
+        currentQuery = searchInput.value.trim();
+        applyFilter();
+        try {
+          var q = currentQuery ? '?q=' + encodeURIComponent(currentQuery) : '';
+          history.replaceState(null, '', window.location.pathname + q + window.location.hash);
+        } catch (e) {}
+      });
+
+      searchInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && searchInput.value) {
+          searchInput.value = '';
+          searchInput.dispatchEvent(new Event('input'));
+        }
+      });
+
+      $('clear-search').addEventListener('click', function () {
         searchInput.value = '';
-        render();
+        searchInput.dispatchEvent(new Event('input'));
         searchInput.focus();
       });
 
-      // Press "/" anywhere (outside form fields) to jump to search.
+      // "/" jumps to search from anywhere outside form fields.
       document.addEventListener('keydown', function (e) {
         var tag = (document.activeElement && document.activeElement.tagName) || '';
         if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey && tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
@@ -434,10 +491,28 @@
       });
 
       /* =====================================================================
-       * Init
+       * Init: honour ?q= and ?category=<slug> (used by tool.html breadcrumbs) or #cat-<slug>
        * =================================================================== */
-      buildPills();
-      render();
+      var params = new URLSearchParams(window.location.search);
+      var initialQuery = (params.get('q') || '').trim();
+      if (initialQuery) {
+        searchInput.value = initialQuery;
+        currentQuery = initialQuery;
+      }
+      applyFilter();
+
+      var wanted = (params.get('category') || '').trim().toLowerCase();
+      var hash = window.location.hash.replace('#', '');
+      var targetId = wanted ? 'cat-' + wanted : (hash.indexOf('cat-') === 0 ? hash : '');
+      if (targetId) {
+        var targetGroup = groups.find(function (g) { return g.section.id === targetId && !g.section.classList.contains('hidden'); });
+        if (targetGroup) {
+          setTimeout(function () {
+            targetGroup.section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            setActive(targetGroup);
+          }, 100);
+        }
+      }
     })();
   </script>
 </body>
