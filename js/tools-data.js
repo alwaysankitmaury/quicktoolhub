@@ -1,1778 +1,604 @@
-/**
- * QuickToolHub - js/tools-data.js
- * ---------------------------------------------------------------------------
- * Master registry for the Data-Driven Single Engine Architecture.
- * One engine page (tool.html?id=word-counter) reads ALL_TOOLS, finds the tool
- * by `id`, renders its `inputs`, and runs `execute` on click.
- *
- * TOOL SCHEMA
- *   id          {string}  unique slug (used in URLs)
- *   title       {string}  display name
- *   category    {string}  one of TOOL_CATEGORIES[].name
- *   icon        {string}  FontAwesome 6 classes, e.g. 'fa-solid fa-font'
- *   desc        {string}  short description (cards + meta description)
- *   keywords    {string[]} extra search terms (optional)
- *   inputs      {Input[]} fields rendered by the engine (see below)
- *   actionText  {string}  button label
- *   execute     {(values) => string | Result}
- *
- * INPUT SCHEMA
- *   id, label, type: 'textarea' | 'text' | 'number' | 'select' | 'date'
- *   placeholder, default, required, help (all optional)
- *   textarea: rows            number: min, max, step
- *   select:   options [{ value, label }]
- *
- * EXECUTE CONTRACT
- *   values  - object keyed by input id. Values may be strings (raw from the
- *             DOM); every tool parses its own numbers.
- *   return  - a plain string, OR an object:
- *               { text?:  string,                       // main output (monospace / copyable)
- *                 stats?: [{ label, value }],           // result rows / cards
- *                 note?:  string }                      // small footnote under the result
- *   errors  - validation problems are thrown as `new Error('friendly message')`.
- *             The engine should catch them and show err.message to the user.
- *
- * ADDING A TOOL: append an object to ALL_TOOLS. Nothing else needs to change.
- * ---------------------------------------------------------------------------
- */
-'use strict';
-
-/* ===========================================================================
- * Categories
- * ========================================================================= */
-const TOOL_CATEGORIES = [
-  { name: 'Text Utilities', slug: 'text-utilities', icon: 'fa-solid fa-align-left' },
-  { name: 'Developer Tools', slug: 'developer-tools', icon: 'fa-solid fa-terminal' },
-  { name: 'Math & Finance', slug: 'math-finance', icon: 'fa-solid fa-calculator' },
-  { name: 'Converters', slug: 'converters', icon: 'fa-solid fa-right-left' },
-  { name: 'Security & Web', slug: 'security-web', icon: 'fa-solid fa-shield-halved' }
-];
-
-const CAT = {
-  TEXT: 'Text Utilities',
-  DEV: 'Developer Tools',
-  MATH: 'Math & Finance',
-  CONV: 'Converters',
-  SEC: 'Security & Web'
-};
-
-/* ===========================================================================
- * Shared helpers (kept private inside an IIFE, exposed as TOOL_HELPERS)
- * ========================================================================= */
-const TOOL_HELPERS = (() => {
-  const num = (v) => {
-    if (v === null || v === undefined) return NaN;
-    if (typeof v === 'string' && v.trim() === '') return NaN;
-    return Number(v);
-  };
-
-  const needNum = (v, label, opts = {}) => {
-    const n = num(v);
-    if (!Number.isFinite(n)) throw new Error('Please enter a valid number for "' + label + '".');
-    if (opts.positive && n <= 0) throw new Error('"' + label + '" must be greater than zero.');
-    if (opts.min !== undefined && n < opts.min) throw new Error('"' + label + '" must be at least ' + opts.min + '.');
-    if (opts.max !== undefined && n > opts.max) throw new Error('"' + label + '" must be ' + opts.max + ' or less.');
-    return n;
-  };
-
-  const needText = (v, label) => {
-    const s = v === null || v === undefined ? '' : String(v);
-    if (s.trim() === '') throw new Error('Please enter ' + label + '.');
-    return s;
-  };
-
-  // Up to `maxDigits` decimals with thousands separators.
-  const fmt = (n, maxDigits = 6) =>
-    Number.isFinite(n) ? n.toLocaleString('en-US', { maximumFractionDigits: maxDigits }) : String(n);
-
-  // Significant-digit formatting for unit conversions.
-  const fmtSig = (n) => {
-    if (!Number.isFinite(n)) return String(n);
-    if (n === 0) return '0';
-    const r = Number(n.toPrecision(12));
-    if (Math.abs(r) >= 1e15 || Math.abs(r) < 1e-9) return r.toExponential(6);
-    return r.toLocaleString('en-US', { maximumFractionDigits: 10 });
-  };
-
-  const money = (n) =>
-    Number.isFinite(n) ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : String(n);
-
-  const utf8 = (s) => new TextEncoder().encode(s);
-
-  const byteLength = (s) => utf8(s).length;
-
-  const fmtBytes = (n) => {
-    if (n < 1024) return n + ' B';
-    if (n < 1048576) return (n / 1024).toFixed(2) + ' KB';
-    return (n / 1048576).toFixed(2) + ' MB';
-  };
-
-  const fmtDuration = (seconds) => {
-    const s = Math.max(0, Math.round(seconds));
-    if (s < 60) return s + ' sec';
-    const m = Math.floor(s / 60);
-    const r = s % 60;
-    return m + ' min' + (r ? ' ' + r + ' sec' : '');
-  };
-
-  const randomBytes = (n) => {
-    const arr = new Uint8Array(n);
-    if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-      crypto.getRandomValues(arr);
-    } else {
-      for (let i = 0; i < n; i++) arr[i] = Math.floor(Math.random() * 256);
-    }
-    return arr;
-  };
-
-  // Uniform random integer in [0, max) without modulo bias.
-  const randomInt = (max) => {
-    if (max <= 1) return 0;
-    const limit = Math.floor(0x100000000 / max) * max;
-    let x;
-    do {
-      const b = randomBytes(4);
-      x = ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0;
-    } while (x >= limit);
-    return x % max;
-  };
-
-  const shuffle = (arr) => {
-    for (let i = arr.length - 1; i > 0; i--) {
-      const j = randomInt(i + 1);
-      const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
-    }
-    return arr;
-  };
-
-  return { num, needNum, needText, fmt, fmtSig, money, utf8, byteLength, fmtBytes, fmtDuration, randomBytes, randomInt, shuffle };
-})();
-
-/* ===========================================================================
- * Pure algorithm libraries used by several tools
- * ========================================================================= */
-
-/* ---- Text case algorithms ---- */
-const CASE_ALGORITHMS = (() => {
-  const WORD_RE = /[\p{L}\p{N}][\p{L}\p{N}'\u2019]*/gu;
-  const capFirst = (w) => w.charAt(0).toUpperCase() + w.slice(1);
-
-  const splitWords = (t) =>
-    t.replace(/([\p{Ll}\p{N}])(\p{Lu})/gu, '$1 $2').match(/[\p{L}\p{N}]+/gu) || [];
-
-  return {
-    upper: (t) => t.toUpperCase(),
-    lower: (t) => t.toLowerCase(),
-    title: (t) => t.toLowerCase().replace(WORD_RE, capFirst),
-    capitalized: (t) => t.replace(WORD_RE, capFirst),
-    sentence: (t) => {
-      let s = t.toLowerCase();
-      s = s.replace(/(^\s*[("'\u201C\u2018\[]*)(\p{L})/u, (m, pre, ch) => pre + ch.toUpperCase());
-      s = s.replace(/([.!?\u2026]["')\]\u201D\u2019]*\s+[("'\u201C\u2018\[]*)(\p{L})/gu, (m, pre, ch) => pre + ch.toUpperCase());
-      s = s.replace(/(\n\s*[("'\u201C\u2018\[]*)(\p{L})/gu, (m, pre, ch) => pre + ch.toUpperCase());
-      s = s.replace(/(^|[^\p{L}\p{N}'])i(?=$|[^\p{L}\p{N}']|'(?:m|ll|ve|d)\b)/gu, (m, pre) => pre + 'I');
-      return s;
-    },
-    alternating: (t) => {
-      let out = '';
-      let up = false;
-      for (const c of Array.from(t)) {
-        if (c.toLowerCase() !== c.toUpperCase()) {
-          out += up ? c.toUpperCase() : c.toLowerCase();
-          up = !up;
-        } else {
-          out += c;
-        }
-      }
-      return out;
-    },
-    camel: (t) =>
-      splitWords(t).map((w, i) => (i === 0 ? w.toLowerCase() : capFirst(w.toLowerCase()))).join(''),
-    snake: (t) => splitWords(t).map((w) => w.toLowerCase()).join('_'),
-    kebab: (t) => splitWords(t).map((w) => w.toLowerCase()).join('-')
-  };
-})();
-
-/* ---- Hash algorithms (synchronous, pure JS, operate on Uint8Array) ---- */
-const HASH_ALGORITHMS = (() => {
-  const hex32be = (n) => (n >>> 0).toString(16).padStart(8, '0');
-  const hex32le = (n) => {
-    let s = '';
-    for (let i = 0; i < 4; i++) s += ((n >>> (8 * i)) & 255).toString(16).padStart(2, '0');
-    return s;
-  };
-
-  const pad = (bytes, littleEndian) => {
-    const len = bytes.length;
-    const padLen = (((len + 8) >>> 6) + 1) << 6;
-    const buf = new Uint8Array(padLen);
-    buf.set(bytes);
-    buf[len] = 0x80;
-    const view = new DataView(buf.buffer);
-    const low = (len * 8) >>> 0;
-    const high = Math.floor(len / 0x20000000);
-    if (littleEndian) {
-      view.setUint32(padLen - 8, low, true);
-      view.setUint32(padLen - 4, high, true);
-    } else {
-      view.setUint32(padLen - 8, high, false);
-      view.setUint32(padLen - 4, low, false);
-    }
-    return { view, padLen };
-  };
-
-  /* MD5 */
-  const MD5_K = new Uint32Array(64);
-  for (let i = 0; i < 64; i++) MD5_K[i] = Math.floor(Math.abs(Math.sin(i + 1)) * 4294967296) >>> 0;
-  const MD5_S = [7, 12, 17, 22, 5, 9, 14, 20, 4, 11, 16, 23, 6, 10, 15, 21];
-
-  const md5 = (bytes) => {
-    const { view, padLen } = pad(bytes, true);
-    let a0 = 0x67452301, b0 = 0xefcdab89, c0 = 0x98badcfe, d0 = 0x10325476;
-    const M = new Uint32Array(16);
-    for (let off = 0; off < padLen; off += 64) {
-      for (let i = 0; i < 16; i++) M[i] = view.getUint32(off + i * 4, true);
-      let A = a0, B = b0, C = c0, D = d0;
-      for (let i = 0; i < 64; i++) {
-        let F, g;
-        if (i < 16) { F = (B & C) | (~B & D); g = i; }
-        else if (i < 32) { F = (D & B) | (~D & C); g = (5 * i + 1) % 16; }
-        else if (i < 48) { F = B ^ C ^ D; g = (3 * i + 5) % 16; }
-        else { F = C ^ (B | ~D); g = (7 * i) % 16; }
-        F = (F + A + MD5_K[i] + M[g]) >>> 0;
-        A = D; D = C; C = B;
-        const s = MD5_S[(i >> 4) * 4 + (i & 3)];
-        B = (B + ((F << s) | (F >>> (32 - s)))) >>> 0;
-      }
-      a0 = (a0 + A) >>> 0; b0 = (b0 + B) >>> 0; c0 = (c0 + C) >>> 0; d0 = (d0 + D) >>> 0;
-    }
-    return hex32le(a0) + hex32le(b0) + hex32le(c0) + hex32le(d0);
-  };
-
-  /* SHA-1 */
-  const rotl = (x, n) => ((x << n) | (x >>> (32 - n))) >>> 0;
-
-  const sha1 = (bytes) => {
-    const { view, padLen } = pad(bytes, false);
-    let h0 = 0x67452301, h1 = 0xefcdab89, h2 = 0x98badcfe, h3 = 0x10325476, h4 = 0xc3d2e1f0;
-    const w = new Uint32Array(80);
-    for (let off = 0; off < padLen; off += 64) {
-      for (let i = 0; i < 16; i++) w[i] = view.getUint32(off + i * 4, false);
-      for (let i = 16; i < 80; i++) w[i] = rotl(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
-      let a = h0, b = h1, c = h2, d = h3, e = h4;
-      for (let i = 0; i < 80; i++) {
-        let f, k;
-        if (i < 20) { f = (b & c) | (~b & d); k = 0x5a827999; }
-        else if (i < 40) { f = b ^ c ^ d; k = 0x6ed9eba1; }
-        else if (i < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8f1bbcdc; }
-        else { f = b ^ c ^ d; k = 0xca62c1d6; }
-        const temp = (rotl(a, 5) + f + e + k + w[i]) >>> 0;
-        e = d; d = c; c = rotl(b, 30); b = a; a = temp;
-      }
-      h0 = (h0 + a) >>> 0; h1 = (h1 + b) >>> 0; h2 = (h2 + c) >>> 0; h3 = (h3 + d) >>> 0; h4 = (h4 + e) >>> 0;
-    }
-    return hex32be(h0) + hex32be(h1) + hex32be(h2) + hex32be(h3) + hex32be(h4);
-  };
-
-  /* SHA-256 */
-  const SHA256_K = new Uint32Array([
-    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
-  ]);
-  const rotr = (x, n) => ((x >>> n) | (x << (32 - n))) >>> 0;
-
-  const sha256 = (bytes) => {
-    const { view, padLen } = pad(bytes, false);
-    const H = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
-    const w = new Uint32Array(64);
-    for (let off = 0; off < padLen; off += 64) {
-      for (let i = 0; i < 16; i++) w[i] = view.getUint32(off + i * 4, false);
-      for (let i = 16; i < 64; i++) {
-        const s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3);
-        const s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10);
-        w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
-      }
-      let [a, b, c, d, e, f, g, h] = H;
-      for (let i = 0; i < 64; i++) {
-        const S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
-        const ch = (e & f) ^ (~e & g);
-        const t1 = (h + S1 + ch + SHA256_K[i] + w[i]) >>> 0;
-        const S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
-        const maj = (a & b) ^ (a & c) ^ (b & c);
-        const t2 = (S0 + maj) >>> 0;
-        h = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
-      }
-      H[0] = (H[0] + a) >>> 0; H[1] = (H[1] + b) >>> 0; H[2] = (H[2] + c) >>> 0; H[3] = (H[3] + d) >>> 0;
-      H[4] = (H[4] + e) >>> 0; H[5] = (H[5] + f) >>> 0; H[6] = (H[6] + g) >>> 0; H[7] = (H[7] + h) >>> 0;
-    }
-    return H.map(hex32be).join('');
-  };
-
-  return { md5, sha1, sha256 };
-})();
-
-/* ---- Generic unit-converter factory (Length, Weight, Speed, Area, Data...) ---- */
-const makeUnitConverter = (cfg) => {
-  const { id, title, icon, desc, keywords, units, defaultFrom, defaultTo, extraInputs, unitsFor } = cfg;
-  const H = TOOL_HELPERS;
-  const options = units.map((u) => ({ value: u.key, label: u.label }));
-
-  return {
-    id,
-    title,
-    category: CAT.CONV,
-    icon,
-    desc,
-    keywords: keywords || [],
-    inputs: [
-      { id: 'value', label: 'Value', type: 'number', placeholder: 'Enter a value', default: 1, step: 'any', required: true },
-      { id: 'from', label: 'From', type: 'select', options, default: units[defaultFrom || 0].key },
-      { id: 'to', label: 'To', type: 'select', options, default: units[defaultTo || 1].key }
-    ].concat(extraInputs || []),
-    actionText: 'Convert',
-    execute: (v) => {
-      const list = unitsFor ? unitsFor(v) : units;
-      const value = H.needNum(v.value, 'Value');
-      const from = list.find((u) => u.key === v.from);
-      const to = list.find((u) => u.key === v.to);
-      if (!from || !to) throw new Error('Please choose both units.');
-      const base = value * from.factor;
-      const result = base / to.factor;
-      return {
-        text: H.fmtSig(value) + ' ' + from.symbol + ' = ' + H.fmtSig(result) + ' ' + to.symbol,
-        stats: list
-          .filter((u) => u.key !== from.key)
-          .map((u) => ({ label: u.label, value: H.fmtSig(base / u.factor) + ' ' + u.symbol }))
-      };
-    }
-  };
-};
-
-/* ===========================================================================
- * MASTER ARRAY
- * ========================================================================= */
 const ALL_TOOLS = [
+...(function () {
+'use strict';
+const L = [];
+const CAT = { TEXT: 'Text & Content Utilities', DEV: 'Developer & Coding Tools', MATH: 'Math & Calculators', UNIT: 'Unit Converters', LIFE: 'Everyday Utilities & Time', SEC: 'Security & Hashing' };
 
-  /* =======================================================================
-   * TEXT UTILITIES
-   * ===================================================================== */
-  {
-    id: 'word-counter',
-    title: 'Word Counter',
-    category: CAT.TEXT,
-    icon: 'fa-solid fa-spell-check',
-    desc: 'Count words, characters, sentences and paragraphs, and estimate reading time.',
-    keywords: ['character count', 'word count', 'reading time', 'sentence counter'],
-    inputs: [
-      { id: 'text', label: 'Your text', type: 'textarea', rows: 10, placeholder: 'Type or paste your text here...', required: false }
-    ],
-    actionText: 'Count Words',
-    execute: (v) => {
-      const H = TOOL_HELPERS;
-      const text = String(v.text || '');
-      const words = (text.match(/\S+/g) || []).length;
-      const sentences = text.split(/[.!?]+/).filter((s) => s.trim() !== '').length;
-      const paragraphs = text.split(/\n\s*\n/).filter((p) => p.trim() !== '').length;
-      const lines = text === '' ? 0 : text.split(/\r?\n/).length;
-      return {
-        stats: [
-          { label: 'Words', value: H.fmt(words) },
-          { label: 'Characters', value: H.fmt(text.length) },
-          { label: 'Characters (no spaces)', value: H.fmt(text.replace(/\s/g, '').length) },
-          { label: 'Sentences', value: H.fmt(sentences) },
-          { label: 'Paragraphs', value: H.fmt(paragraphs) },
-          { label: 'Lines', value: H.fmt(lines) },
-          { label: 'Reading time', value: H.fmtDuration((words / 200) * 60) },
-          { label: 'Speaking time', value: H.fmtDuration((words / 130) * 60) }
-        ],
-        note: 'Reading time assumes 200 words per minute; speaking time assumes 130 words per minute.'
-      };
-    }
-  },
+/* ---------- input builders ---------- */
+const ta = (name, label, placeholder) => ({ name, label, type: 'textarea', placeholder: placeholder || '' });
+const tx = (name, label, placeholder) => ({ name, label, type: 'text', placeholder: placeholder || '' });
+const nm = (name, label, placeholder) => ({ name, label, type: 'number', placeholder: placeholder || '' });
+const sl = (name, label, options) => ({ name, label, type: 'select', options });
 
-  {
-    id: 'case-converter',
-    title: 'Case Converter',
-    category: CAT.TEXT,
-    icon: 'fa-solid fa-font',
-    desc: 'Convert text to UPPERCASE, lowercase, Title Case, Sentence case, camelCase, snake_case and more.',
-    keywords: ['uppercase', 'lowercase', 'title case', 'sentence case', 'camelCase', 'snake_case', 'kebab-case'],
-    inputs: [
-      { id: 'text', label: 'Your text', type: 'textarea', rows: 8, placeholder: 'Type or paste your text here...', required: true },
-      {
-        id: 'mode', label: 'Convert to', type: 'select', default: 'upper',
-        options: [
-          { value: 'upper', label: 'UPPERCASE' },
-          { value: 'lower', label: 'lowercase' },
-          { value: 'title', label: 'Title Case' },
-          { value: 'sentence', label: 'Sentence case' },
-          { value: 'capitalized', label: 'Capitalized Case (keep other letters)' },
-          { value: 'alternating', label: 'Alternating cAsE' },
-          { value: 'camel', label: 'camelCase' },
-          { value: 'snake', label: 'snake_case' },
-          { value: 'kebab', label: 'kebab-case' }
-        ]
-      }
-    ],
-    actionText: 'Convert Case',
-    execute: (v) => {
-      const text = TOOL_HELPERS.needText(v.text, 'some text to convert');
-      const fn = CASE_ALGORITHMS[v.mode];
-      if (!fn) throw new Error('Unknown case type.');
-      return fn(text);
-    }
-  },
-
-  {
-    id: 'remove-duplicate-lines',
-    title: 'Remove Duplicate Lines',
-    category: CAT.TEXT,
-    icon: 'fa-solid fa-clone',
-    desc: 'Delete repeated lines from a list and keep only the unique ones, in their original order.',
-    keywords: ['duplicate remover', 'unique lines', 'deduplicate', 'list cleaner'],
-    inputs: [
-      { id: 'text', label: 'Lines of text', type: 'textarea', rows: 10, placeholder: 'One item per line...', required: true },
-      {
-        id: 'caseSensitive', label: 'Case sensitive', type: 'select', default: 'no',
-        options: [{ value: 'no', label: 'No (Apple = apple)' }, { value: 'yes', label: 'Yes (Apple ≠ apple)' }]
-      },
-      {
-        id: 'trimLines', label: 'Trim spaces around each line', type: 'select', default: 'yes',
-        options: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }]
-      },
-      {
-        id: 'removeEmpty', label: 'Remove empty lines', type: 'select', default: 'yes',
-        options: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }]
-      }
-    ],
-    actionText: 'Remove Duplicates',
-    execute: (v) => {
-      const text = TOOL_HELPERS.needText(v.text, 'some lines of text');
-      const caseSensitive = v.caseSensitive === 'yes';
-      const trim = v.trimLines !== 'no';
-      const skipEmpty = v.removeEmpty !== 'no';
-      const lines = text.split(/\r?\n/);
-      const seen = new Set();
-      const out = [];
-      for (const raw of lines) {
-        const line = trim ? raw.trim() : raw;
-        if (skipEmpty && line.trim() === '') continue;
-        const key = caseSensitive ? line : line.toLowerCase();
-        if (seen.has(key)) continue;
-        seen.add(key);
-        out.push(line);
-      }
-      return {
-        text: out.join('\n'),
-        stats: [
-          { label: 'Original lines', value: String(lines.length) },
-          { label: 'Unique lines', value: String(out.length) },
-          { label: 'Removed', value: String(lines.length - out.length) }
-        ]
-      };
-    }
-  },
-
-  {
-    id: 'reverse-text',
-    title: 'Reverse Text',
-    category: CAT.TEXT,
-    icon: 'fa-solid fa-right-left',
-    desc: 'Reverse the characters, word order, letters in each word, or line order of any text.',
-    keywords: ['mirror text', 'backwards text', 'reverse string', 'flip text'],
-    inputs: [
-      { id: 'text', label: 'Your text', type: 'textarea', rows: 8, placeholder: 'Type or paste your text here...', required: true },
-      {
-        id: 'mode', label: 'Reverse mode', type: 'select', default: 'chars',
-        options: [
-          { value: 'chars', label: 'Reverse all characters' },
-          { value: 'words', label: 'Reverse word order' },
-          { value: 'eachWord', label: 'Reverse letters in each word' },
-          { value: 'lines', label: 'Reverse line order' }
-        ]
-      }
-    ],
-    actionText: 'Reverse Text',
-    execute: (v) => {
-      const text = TOOL_HELPERS.needText(v.text, 'some text to reverse');
-      const reverseChars = (s) => {
-        let parts;
-        if (typeof Intl !== 'undefined' && Intl.Segmenter) {
-          parts = Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s), (x) => x.segment);
-        } else {
-          parts = Array.from(s);
-        }
-        return parts.reverse().join('');
-      };
-      switch (v.mode) {
-        case 'words':
-          return text.split(/\r?\n/).map((l) => l.trim().split(/\s+/).reverse().join(' ')).join('\n');
-        case 'eachWord':
-          return text.replace(/\S+/g, reverseChars);
-        case 'lines':
-          return text.split(/\r?\n/).reverse().join('\n');
-        default:
-          return reverseChars(text);
-      }
-    }
-  },
-
-  {
-    id: 'text-to-slug',
-    title: 'Text to Slug Converter',
-    category: CAT.TEXT,
-    icon: 'fa-solid fa-link',
-    desc: 'Turn titles and phrases into clean, SEO-friendly URL slugs.',
-    keywords: ['slugify', 'url slug', 'permalink', 'seo friendly url'],
-    inputs: [
-      { id: 'text', label: 'Title or phrase', type: 'text', placeholder: 'e.g. 10 Best Free Online Tools (2026)', required: true },
-      {
-        id: 'separator', label: 'Separator', type: 'select', default: '-',
-        options: [{ value: '-', label: 'Hyphen ( - )' }, { value: '_', label: 'Underscore ( _ )' }]
-      },
-      {
-        id: 'lower', label: 'Lowercase', type: 'select', default: 'yes',
-        options: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }]
-      },
-      { id: 'maxLen', label: 'Max length (0 = unlimited)', type: 'number', default: 0, min: 0, max: 500, step: 1 }
-    ],
-    actionText: 'Generate Slug',
-    execute: (v) => {
-      const H = TOOL_HELPERS;
-      const text = H.needText(v.text, 'a title or phrase');
-      const sep = v.separator === '_' ? '_' : '-';
-      const maxLen = Math.max(0, Math.floor(H.num(v.maxLen) || 0));
-      let s = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/&/g, ' and ');
-      if (v.lower !== 'no') s = s.toLowerCase();
-      s = s.replace(/[^a-zA-Z0-9]+/g, sep);
-      const trimEdges = (x) => {
-        while (x.startsWith(sep)) x = x.slice(1);
-        while (x.endsWith(sep)) x = x.slice(0, -1);
-        return x;
-      };
-      s = trimEdges(s);
-      if (maxLen > 0 && s.length > maxLen) s = trimEdges(s.slice(0, maxLen));
-      if (!s) throw new Error('No valid slug characters were found. Use letters or numbers.');
-      return s;
-    }
-  },
-
-  {
-    id: 'sort-lines',
-    title: 'Sort Lines Alphabetically',
-    category: CAT.TEXT,
-    icon: 'fa-solid fa-arrow-down-a-z',
-    desc: 'Sort a list of lines A-Z, Z-A, by length, by number, or shuffle them randomly.',
-    keywords: ['alphabetical order', 'sort list', 'sort text', 'shuffle lines'],
-    inputs: [
-      { id: 'text', label: 'Lines of text', type: 'textarea', rows: 10, placeholder: 'One item per line...', required: true },
-      {
-        id: 'order', label: 'Sort order', type: 'select', default: 'az',
-        options: [
-          { value: 'az', label: 'A → Z' },
-          { value: 'za', label: 'Z → A' },
-          { value: 'shortest', label: 'Shortest first' },
-          { value: 'longest', label: 'Longest first' },
-          { value: 'numeric', label: 'Numeric (by leading number)' },
-          { value: 'random', label: 'Random shuffle' }
-        ]
-      },
-      {
-        id: 'removeEmpty', label: 'Remove empty lines', type: 'select', default: 'yes',
-        options: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }]
-      }
-    ],
-    actionText: 'Sort Lines',
-    execute: (v) => {
-      const text = TOOL_HELPERS.needText(v.text, 'some lines of text');
-      let lines = text.split(/\r?\n/);
-      if (v.removeEmpty !== 'no') lines = lines.filter((l) => l.trim() !== '');
-      const coll = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-      switch (v.order) {
-        case 'za':
-          lines.sort((a, b) => coll.compare(b, a));
-          break;
-        case 'shortest':
-          lines.sort((a, b) => a.length - b.length || coll.compare(a, b));
-          break;
-        case 'longest':
-          lines.sort((a, b) => b.length - a.length || coll.compare(a, b));
-          break;
-        case 'numeric':
-          lines.sort((a, b) => {
-            const x = parseFloat(a), y = parseFloat(b);
-            const nx = Number.isNaN(x), ny = Number.isNaN(y);
-            if (nx && ny) return coll.compare(a, b);
-            if (nx) return 1;
-            if (ny) return -1;
-            return x - y;
-          });
-          break;
-        case 'random':
-          TOOL_HELPERS.shuffle(lines);
-          break;
-        default:
-          lines.sort(coll.compare);
-      }
-      return lines.join('\n');
-    }
-  },
-
-  {
-    id: 'lorem-ipsum-generator',
-    title: 'Lorem Ipsum Generator',
-    category: CAT.TEXT,
-    icon: 'fa-solid fa-paragraph',
-    desc: 'Generate placeholder paragraphs, sentences or words for mockups and designs.',
-    keywords: ['dummy text', 'placeholder text', 'filler text', 'lipsum'],
-    inputs: [
-      {
-        id: 'type', label: 'Generate', type: 'select', default: 'paragraphs',
-        options: [{ value: 'paragraphs', label: 'Paragraphs' }, { value: 'sentences', label: 'Sentences' }, { value: 'words', label: 'Words' }]
-      },
-      { id: 'count', label: 'Amount', type: 'number', default: 3, min: 1, max: 5000, step: 1, required: true },
-      {
-        id: 'startLorem', label: 'Start with "Lorem ipsum dolor sit amet"', type: 'select', default: 'yes',
-        options: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }]
-      }
-    ],
-    actionText: 'Generate Text',
-    execute: (v) => {
-      const H = TOOL_HELPERS;
-      const WORDS = ('lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et ' +
-        'dolore magna aliqua enim ad minim veniam quis nostrud exercitation ullamco laboris nisi aliquip ex ea commodo ' +
-        'consequat duis aute irure in reprehenderit voluptate velit esse cillum eu fugiat nulla pariatur excepteur sint ' +
-        'occaecat cupidatat non proident sunt culpa qui officia deserunt mollit anim id est laborum').split(' ');
-      const START_SENTENCE = 'Lorem ipsum dolor sit amet, consectetur adipiscing elit.';
-      const rnd = (n) => Math.floor(Math.random() * n);
-
-      const sentence = () => {
-        const n = 8 + rnd(9);
-        const picked = [];
-        let last = '';
-        for (let i = 0; i < n; i++) {
-          let w;
-          do { w = WORDS[rnd(WORDS.length)]; } while (w === last);
-          picked.push(w);
-          last = w;
-        }
-        if (n > 10) picked[3 + rnd(4)] += ',';
-        const s = picked.join(' ');
-        return s.charAt(0).toUpperCase() + s.slice(1) + '.';
-      };
-      const paragraph = () => {
-        const n = 4 + rnd(4);
-        return Array.from({ length: n }, sentence).join(' ');
-      };
-
-      const type = v.type || 'paragraphs';
-      const max = type === 'paragraphs' ? 50 : type === 'sentences' ? 200 : 5000;
-      const count = Math.floor(H.needNum(v.count, 'Amount', { min: 1, max }));
-      const startLorem = v.startLorem !== 'no';
-      let text;
-
-      if (type === 'words') {
-        const out = [];
-        for (let i = 0; i < count; i++) {
-          out.push(startLorem && i < 8 ? WORDS[i] : WORDS[rnd(WORDS.length)]);
-        }
-        text = out.join(' ');
-      } else if (type === 'sentences') {
-        const out = Array.from({ length: count }, sentence);
-        if (startLorem) out[0] = START_SENTENCE;
-        text = out.join(' ');
-      } else {
-        const out = Array.from({ length: count }, paragraph);
-        if (startLorem) out[0] = START_SENTENCE + ' ' + Array.from({ length: 3 + rnd(3) }, sentence).join(' ');
-        text = out.join('\n\n');
-      }
-      return { text, stats: [{ label: 'Words', value: String((text.match(/\S+/g) || []).length) }, { label: 'Characters', value: String(text.length) }] };
-    }
-  },
-
-  /* =======================================================================
-   * DEVELOPER TOOLS
-   * ===================================================================== */
-  {
-    id: 'base64-encode-decode',
-    title: 'Base64 Encode / Decode',
-    category: CAT.DEV,
-    icon: 'fa-solid fa-code',
-    desc: 'Encode text to Base64 or decode Base64 back to readable text, with full UTF-8 support.',
-    keywords: ['base64', 'encode', 'decode', 'btoa', 'atob'],
-    inputs: [
-      { id: 'text', label: 'Input', type: 'textarea', rows: 8, placeholder: 'Enter text or a Base64 string...', required: true },
-      {
-        id: 'mode', label: 'Action', type: 'select', default: 'encode',
-        options: [{ value: 'encode', label: 'Encode to Base64' }, { value: 'decode', label: 'Decode from Base64' }]
-      },
-      {
-        id: 'variant', label: 'Encoding variant', type: 'select', default: 'standard',
-        options: [{ value: 'standard', label: 'Standard (+ / =)' }, { value: 'url', label: 'URL-safe (- _ no padding)' }],
-        help: 'Only used when encoding. Decoding accepts both variants.'
-      }
-    ],
-    actionText: 'Run',
-    execute: (v) => {
-      const text = TOOL_HELPERS.needText(v.text, 'some input');
-      if (v.mode === 'decode') {
-        let s = text.trim().replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
-        if (!/^[A-Za-z0-9+/]*={0,2}$/.test(s)) throw new Error('Invalid Base64 input. It contains characters that are not allowed.');
-        while (s.length % 4) s += '=';
-        let bin;
-        try { bin = atob(s); } catch (e) { throw new Error('Invalid Base64 input.'); }
-        const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
-        try {
-          return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-        } catch (e) {
-          throw new Error('The decoded data is not valid UTF-8 text (it may be binary data such as an image).');
-        }
-      }
-      const bytes = TOOL_HELPERS.utf8(text);
-      let bin = '';
-      for (let i = 0; i < bytes.length; i += 0x8000) {
-        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-      }
-      let out = btoa(bin);
-      if (v.variant === 'url') out = out.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-      return out;
-    }
-  },
-
-  {
-    id: 'url-encoder-decoder',
-    title: 'URL Encoder / Decoder',
-    category: CAT.DEV,
-    icon: 'fa-solid fa-globe',
-    desc: 'Percent-encode or decode URLs and query-string values safely.',
-    keywords: ['percent encoding', 'encodeURIComponent', 'decodeURI', 'url escape'],
-    inputs: [
-      { id: 'text', label: 'Input', type: 'textarea', rows: 6, placeholder: 'Enter a URL or text...', required: true },
-      {
-        id: 'mode', label: 'Action', type: 'select', default: 'encodeComponent',
-        options: [
-          { value: 'encodeComponent', label: 'Encode component (query values)' },
-          { value: 'decodeComponent', label: 'Decode component' },
-          { value: 'encodeUri', label: 'Encode full URL (keeps : / ? & =)' },
-          { value: 'decodeUri', label: 'Decode full URL' }
-        ]
-      }
-    ],
-    actionText: 'Run',
-    execute: (v) => {
-      const text = TOOL_HELPERS.needText(v.text, 'some input');
-      try {
-        switch (v.mode) {
-          case 'decodeComponent': return decodeURIComponent(text);
-          case 'encodeUri': return encodeURI(text);
-          case 'decodeUri': return decodeURI(text);
-          default: return encodeURIComponent(text);
-        }
-      } catch (e) {
-        throw new Error('Malformed input: the text contains an invalid percent-encoded or Unicode sequence.');
-      }
-    }
-  },
-
-  {
-    id: 'json-formatter-validator',
-    title: 'JSON Formatter & Validator',
-    category: CAT.DEV,
-    icon: 'fa-solid fa-file-code',
-    desc: 'Beautify, minify and validate JSON data instantly, with clear error messages.',
-    keywords: ['json beautifier', 'json minify', 'json lint', 'pretty print json'],
-    inputs: [
-      { id: 'text', label: 'JSON input', type: 'textarea', rows: 12, placeholder: '{"name":"QuickToolHub","tools":500}', required: true },
-      {
-        id: 'action', label: 'Action', type: 'select', default: 'beautify',
-        options: [{ value: 'beautify', label: 'Beautify' }, { value: 'minify', label: 'Minify' }, { value: 'validate', label: 'Validate only' }]
-      },
-      {
-        id: 'indent', label: 'Indentation (beautify)', type: 'select', default: '2',
-        options: [{ value: '2', label: '2 spaces' }, { value: '4', label: '4 spaces' }, { value: 'tab', label: 'Tab' }]
-      },
-      {
-        id: 'sortKeys', label: 'Sort object keys A-Z', type: 'select', default: 'no',
-        options: [{ value: 'no', label: 'No' }, { value: 'yes', label: 'Yes' }]
-      }
-    ],
-    actionText: 'Process JSON',
-    execute: (v) => {
-      const H = TOOL_HELPERS;
-      const text = H.needText(v.text, 'some JSON');
-      let data;
-      try {
-        data = JSON.parse(text);
-      } catch (e) {
-        throw new Error('Invalid JSON: ' + e.message);
-      }
-      const sortDeep = (x) => {
-        if (Array.isArray(x)) return x.map(sortDeep);
-        if (x && typeof x === 'object') {
-          const o = {};
-          Object.keys(x).sort().forEach((k) => { o[k] = sortDeep(x[k]); });
-          return o;
-        }
-        return x;
-      };
-      const depth = (x) => {
-        if (Array.isArray(x)) return 1 + x.reduce((m, i) => Math.max(m, depth(i)), 0);
-        if (x && typeof x === 'object') return 1 + Object.values(x).reduce((m, i) => Math.max(m, depth(i)), 0);
-        return 0;
-      };
-      if (v.sortKeys === 'yes') data = sortDeep(data);
-
-      const type = data === null ? 'null' : Array.isArray(data) ? 'array' : typeof data;
-      const size = Array.isArray(data) ? data.length + ' items' : (data && typeof data === 'object') ? Object.keys(data).length + ' keys' : 'n/a';
-
-      if (v.action === 'validate') {
-        return {
-          text: '✔ Valid JSON',
-          stats: [
-            { label: 'Root type', value: type },
-            { label: 'Top-level size', value: size },
-            { label: 'Nesting depth', value: String(depth(data)) },
-            { label: 'Input size', value: H.fmtBytes(H.byteLength(text)) }
-          ]
-        };
-      }
-      const indent = v.indent === 'tab' ? '\t' : Number(v.indent) || 2;
-      const out = v.action === 'minify' ? JSON.stringify(data) : JSON.stringify(data, null, indent);
-      return {
-        text: out,
-        stats: [
-          { label: 'Root type', value: type },
-          { label: 'Input size', value: H.fmtBytes(H.byteLength(text)) },
-          { label: 'Output size', value: H.fmtBytes(H.byteLength(out)) }
-        ]
-      };
-    }
-  },
-
-  {
-    id: 'html-entity-encoder-decoder',
-    title: 'HTML Entity Encoder / Decoder',
-    category: CAT.DEV,
-    icon: 'fa-brands fa-html5',
-    desc: 'Escape special characters to HTML entities or decode entities back to plain text.',
-    keywords: ['html escape', 'html unescape', 'htmlspecialchars', 'entities'],
-    inputs: [
-      { id: 'text', label: 'Input', type: 'textarea', rows: 8, placeholder: '<p class="intro">Tom & Jerry</p>', required: true },
-      {
-        id: 'mode', label: 'Action', type: 'select', default: 'encode',
-        options: [{ value: 'encode', label: 'Encode to entities' }, { value: 'decode', label: 'Decode entities' }]
-      },
-      {
-        id: 'nonAscii', label: 'Also encode non-ASCII characters (encode only)', type: 'select', default: 'no',
-        options: [{ value: 'no', label: 'No' }, { value: 'yes', label: 'Yes (as &#NNN;)' }]
-      }
-    ],
-    actionText: 'Run',
-    execute: (v) => {
-      const text = TOOL_HELPERS.needText(v.text, 'some input');
-      if (v.mode === 'decode') {
-        const NAMED = {
-          amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00A0', copy: '©', reg: '®', trade: '™',
-          hellip: '…', mdash: '—', ndash: '–', lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”', euro: '€',
-          pound: '£', yen: '¥', cent: '¢', deg: '°', times: '×', divide: '÷', laquo: '«', raquo: '»',
-          bull: '•', middot: '·', para: '¶', sect: '§', plusmn: '±', frac12: '½', frac14: '¼', frac34: '¾'
-        };
-        return text.replace(/&(?:#(\d+)|#[xX]([0-9a-fA-F]+)|([A-Za-z][A-Za-z0-9]*));/g, (m, dec, hex, name) => {
-          if (dec !== undefined || hex !== undefined) {
-            const cp = dec !== undefined ? parseInt(dec, 10) : parseInt(hex, 16);
-            return cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : m;
-          }
-          if (Object.prototype.hasOwnProperty.call(NAMED, name)) return NAMED[name];
-          if (typeof document !== 'undefined') {
-            const t = document.createElement('textarea');
-            t.innerHTML = m;
-            return t.value;
-          }
-          return m;
-        });
-      }
-      let out = text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-      if (v.nonAscii === 'yes') out = out.replace(/[^\x00-\x7F]/gu, (ch) => '&#' + ch.codePointAt(0) + ';');
-      return out;
-    }
-  },
-
-  {
-    id: 'css-minifier',
-    title: 'CSS Minifier',
-    category: CAT.DEV,
-    icon: 'fa-brands fa-css3-alt',
-    desc: 'Compress CSS by removing comments, whitespace and redundant characters to speed up your site.',
-    keywords: ['minify css', 'compress css', 'css optimizer', 'reduce css size'],
-    inputs: [
-      {
-        id: 'text', label: 'CSS code', type: 'textarea', rows: 12, required: true,
-        placeholder: '/* Example */\nbody {\n  margin: 0;\n  padding: 0;\n}'
-      }
-    ],
-    actionText: 'Minify CSS',
-    execute: (v) => {
-      const H = TOOL_HELPERS;
-      const src = H.needText(v.text, 'some CSS');
-      const strings = [];
-      let css = src.replace(/("(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*')/g, (m) => {
-        strings.push(m);
-        return '\u0000' + (strings.length - 1) + '\u0000';
-      });
-      css = css
-        .replace(/\/\*[\s\S]*?\*\//g, '')
-        .replace(/\s+/g, ' ')
-        .replace(/\s*([{};,>])\s*/g, '$1')
-        .replace(/:\s+/g, ':')
-        .replace(/;}/g, '}')
-        .trim();
-      css = css.replace(/\u0000(\d+)\u0000/g, (m, i) => strings[Number(i)]);
-      const before = H.byteLength(src);
-      const after = H.byteLength(css);
-      const saved = before > 0 ? ((before - after) / before) * 100 : 0;
-      return {
-        text: css,
-        stats: [
-          { label: 'Original size', value: H.fmtBytes(before) },
-          { label: 'Minified size', value: H.fmtBytes(after) },
-          { label: 'Saved', value: saved.toFixed(1) + '%' }
-        ]
-      };
-    }
-  },
-
-  {
-    id: 'uuid-generator',
-    title: 'UUID Generator',
-    category: CAT.DEV,
-    icon: 'fa-solid fa-fingerprint',
-    desc: 'Generate random version 4 UUIDs (GUIDs) in bulk using a cryptographically secure source.',
-    keywords: ['guid generator', 'uuid v4', 'random id', 'unique identifier'],
-    inputs: [
-      { id: 'count', label: 'How many UUIDs?', type: 'number', default: 5, min: 1, max: 100, step: 1, required: true },
-      {
-        id: 'letterCase', label: 'Letter case', type: 'select', default: 'lower',
-        options: [{ value: 'lower', label: 'lowercase' }, { value: 'upper', label: 'UPPERCASE' }]
-      },
-      {
-        id: 'hyphens', label: 'Format', type: 'select', default: 'yes',
-        options: [{ value: 'yes', label: 'With hyphens' }, { value: 'no', label: 'Without hyphens' }]
-      }
-    ],
-    actionText: 'Generate UUIDs',
-    execute: (v) => {
-      const H = TOOL_HELPERS;
-      const count = Math.floor(H.needNum(v.count, 'How many UUIDs?', { min: 1, max: 100 }));
-      const list = [];
-      for (let i = 0; i < count; i++) {
-        const b = H.randomBytes(16);
-        b[6] = (b[6] & 0x0f) | 0x40;
-        b[8] = (b[8] & 0x3f) | 0x80;
-        const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
-        let id = h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' + h.slice(16, 20) + '-' + h.slice(20);
-        if (v.hyphens === 'no') id = id.replace(/-/g, '');
-        if (v.letterCase === 'upper') id = id.toUpperCase();
-        list.push(id);
-      }
-      return list.join('\n');
-    }
-  },
-
-  /* =======================================================================
-   * MATH & FINANCE
-   * ===================================================================== */
-  {
-    id: 'percentage-calculator',
-    title: 'Percentage Calculator',
-    category: CAT.MATH,
-    icon: 'fa-solid fa-percent',
-    desc: 'Find a percentage of a number, percentage change, and percentage increase or decrease.',
-    keywords: ['percent', 'percentage change', 'percentage increase', 'percentage of'],
-    inputs: [
-      {
-        id: 'mode', label: 'Calculation', type: 'select', default: 'of',
-        options: [
-          { value: 'of', label: 'What is X% of Y?' },
-          { value: 'is', label: 'X is what percent of Y?' },
-          { value: 'change', label: 'Percentage change from X to Y' },
-          { value: 'increase', label: 'Increase Y by X%' },
-          { value: 'decrease', label: 'Decrease Y by X%' }
-        ]
-      },
-      { id: 'a', label: 'Value X', type: 'number', placeholder: 'e.g. 20', step: 'any', required: true },
-      { id: 'b', label: 'Value Y', type: 'number', placeholder: 'e.g. 150', step: 'any', required: true }
-    ],
-    actionText: 'Calculate',
-    execute: (v) => {
-      const H = TOOL_HELPERS;
-      const a = H.needNum(v.a, 'Value X');
-      const b = H.needNum(v.b, 'Value Y');
-      let text, formula;
-      switch (v.mode) {
-        case 'is': {
-          if (b === 0) throw new Error('Value Y cannot be zero.');
-          const r = (a / b) * 100;
-          text = H.fmt(a) + ' is ' + H.fmt(r) + '% of ' + H.fmt(b);
-          formula = '(' + H.fmt(a) + ' ÷ ' + H.fmt(b) + ') × 100 = ' + H.fmt(r) + '%';
-          break;
-        }
-        case 'change': {
-          if (a === 0) throw new Error('The starting value (X) cannot be zero.');
-          const r = ((b - a) / Math.abs(a)) * 100;
-          text = H.fmt(Math.abs(r)) + '% ' + (r >= 0 ? 'increase' : 'decrease') + ' from ' + H.fmt(a) + ' to ' + H.fmt(b);
-          formula = '((' + H.fmt(b) + ' − ' + H.fmt(a) + ') ÷ |' + H.fmt(a) + '|) × 100 = ' + H.fmt(r) + '%';
-          break;
-        }
-        case 'increase': {
-          const r = b * (1 + a / 100);
-          text = H.fmt(b) + ' increased by ' + H.fmt(a) + '% = ' + H.fmt(r);
-          formula = H.fmt(b) + ' × (1 + ' + H.fmt(a) + ' ÷ 100) = ' + H.fmt(r);
-          break;
-        }
-        case 'decrease': {
-          const r = b * (1 - a / 100);
-          text = H.fmt(b) + ' decreased by ' + H.fmt(a) + '% = ' + H.fmt(r);
-          formula = H.fmt(b) + ' × (1 − ' + H.fmt(a) + ' ÷ 100) = ' + H.fmt(r);
-          break;
-        }
-        default: {
-          const r = (a / 100) * b;
-          text = H.fmt(a) + '% of ' + H.fmt(b) + ' = ' + H.fmt(r);
-          formula = '(' + H.fmt(a) + ' ÷ 100) × ' + H.fmt(b) + ' = ' + H.fmt(r);
-        }
-      }
-      return { text, stats: [{ label: 'Formula', value: formula }] };
-    }
-  },
-
-  {
-    id: 'discount-calculator',
-    title: 'Discount Calculator',
-    category: CAT.MATH,
-    icon: 'fa-solid fa-tags',
-    desc: 'Work out the sale price, the amount you save and the final cost after tax.',
-    keywords: ['sale price', 'percent off', 'savings calculator', 'price after discount'],
-    inputs: [
-      { id: 'price', label: 'Original price', type: 'number', placeholder: 'e.g. 1999', min: 0, step: 'any', required: true },
-      { id: 'discount', label: 'Discount (%)', type: 'number', placeholder: 'e.g. 25', min: 0, max: 100, step: 'any', required: true },
-      { id: 'tax', label: 'Tax / GST (%) - optional', type: 'number', default: 0, min: 0, step: 'any' }
-    ],
-    actionText: 'Calculate Discount',
-    execute: (v) => {
-      const H = TOOL_HELPERS;
-      const price = H.needNum(v.price, 'Original price', { min: 0 });
-      const disc = H.needNum(v.discount, 'Discount (%)', { min: 0, max: 100 });
-      const taxRate = H.num(v.tax);
-      const tax = Number.isFinite(taxRate) ? Math.max(0, taxRate) : 0;
-      const saved = (price * disc) / 100;
-      const after = price - saved;
-      const taxAmt = (after * tax) / 100;
-      const total = after + taxAmt;
-      return {
-        text: 'Final price: ' + H.money(total),
-        stats: [
-          { label: 'Original price', value: H.money(price) },
-          { label: 'You save (' + H.fmt(disc) + '%)', value: H.money(saved) },
-          { label: 'Price after discount', value: H.money(after) },
-          { label: 'Tax (' + H.fmt(tax) + '%)', value: H.money(taxAmt) },
-          { label: 'Final price', value: H.money(total) }
-        ]
-      };
-    }
-  },
-
-  {
-    id: 'simple-interest-calculator',
-    title: 'Simple Interest Calculator',
-    category: CAT.MATH,
-    icon: 'fa-solid fa-coins',
-    desc: 'Calculate simple interest and the total amount for a principal, rate and time period.',
-    keywords: ['interest calculator', 'SI formula', 'loan interest', 'principal rate time'],
-    inputs: [
-      { id: 'principal', label: 'Principal amount', type: 'number', placeholder: 'e.g. 50000', min: 0, step: 'any', required: true },
-      { id: 'rate', label: 'Annual interest rate (%)', type: 'number', placeholder: 'e.g. 7.5', min: 0, step: 'any', required: true },
-      { id: 'time', label: 'Time period', type: 'number', placeholder: 'e.g. 3', min: 0, step: 'any', required: true },
-      {
-        id: 'unit', label: 'Time unit', type: 'select', default: 'years',
-        options: [{ value: 'years', label: 'Years' }, { value: 'months', label: 'Months' }, { value: 'days', label: 'Days' }]
-      }
-    ],
-    actionText: 'Calculate Interest',
-    execute: (v) => {
-      const H = TOOL_HELPERS;
-      const p = H.needNum(v.principal, 'Principal amount', { min: 0 });
-      const r = H.needNum(v.rate, 'Annual interest rate (%)', { min: 0 });
-      const t = H.needNum(v.time, 'Time period', { min: 0 });
-      const years = v.unit === 'months' ? t / 12 : v.unit === 'days' ? t / 365 : t;
-      const interest = (p * r * years) / 100;
-      return {
-        text: 'Simple interest: ' + H.money(interest),
-        stats: [
-          { label: 'Principal', value: H.money(p) },
-          { label: 'Rate', value: H.fmt(r) + '% per year' },
-          { label: 'Time', value: H.fmt(years, 4) + ' years' },
-          { label: 'Interest earned', value: H.money(interest) },
-          { label: 'Total amount', value: H.money(p + interest) },
-          { label: 'Formula', value: 'SI = (P × R × T) ÷ 100' }
-        ]
-      };
-    }
-  },
-
-  {
-    id: 'average-calculator',
-    title: 'Average Calculator',
-    category: CAT.MATH,
-    icon: 'fa-solid fa-calculator',
-    desc: 'Find the mean, median, mode, sum, minimum, maximum and range of a list of numbers.',
-    keywords: ['mean', 'median', 'mode', 'statistics calculator', 'arithmetic mean'],
-    inputs: [
-      {
-        id: 'numbers', label: 'Numbers (separated by commas, spaces or new lines)', type: 'textarea', rows: 6,
-        placeholder: 'e.g. 12, 15, 9, 22, 15', required: true
-      }
-    ],
-    actionText: 'Calculate Average',
-    execute: (v) => {
-      const H = TOOL_HELPERS;
-      const raw = H.needText(v.numbers, 'some numbers');
-      const tokens = raw.split(/[\s,;]+/).filter((t) => t !== '');
-      const nums = tokens.map((t) => {
-        const n = Number(t);
-        if (!Number.isFinite(n)) throw new Error('"' + t + '" is not a valid number.');
-        return n;
-      });
-      if (nums.length === 0) throw new Error('Please enter at least one number.');
-      const sum = nums.reduce((a, b) => a + b, 0);
-      const sorted = nums.slice().sort((a, b) => a - b);
-      const mid = Math.floor(sorted.length / 2);
-      const median = sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-      const counts = new Map();
-      nums.forEach((n) => counts.set(n, (counts.get(n) || 0) + 1));
-      const maxCount = Math.max.apply(null, Array.from(counts.values()));
-      const modes = maxCount > 1 ? Array.from(counts.keys()).filter((k) => counts.get(k) === maxCount).sort((a, b) => a - b) : [];
-      const mean = sum / nums.length;
-      return {
-        text: 'Average (mean): ' + H.fmt(mean, 8),
-        stats: [
-          { label: 'Count', value: String(nums.length) },
-          { label: 'Sum', value: H.fmt(sum, 8) },
-          { label: 'Mean (average)', value: H.fmt(mean, 8) },
-          { label: 'Median', value: H.fmt(median, 8) },
-          { label: 'Mode', value: modes.length ? modes.map((m) => H.fmt(m, 8)).join(', ') : 'None (all values unique)' },
-          { label: 'Minimum', value: H.fmt(sorted[0], 8) },
-          { label: 'Maximum', value: H.fmt(sorted[sorted.length - 1], 8) },
-          { label: 'Range', value: H.fmt(sorted[sorted.length - 1] - sorted[0], 8) }
-        ]
-      };
-    }
-  },
-
-  {
-    id: 'bmi-calculator',
-    title: 'BMI Calculator',
-    category: CAT.MATH,
-    icon: 'fa-solid fa-weight-scale',
-    desc: 'Calculate your Body Mass Index and see your WHO weight category and healthy weight range.',
-    keywords: ['body mass index', 'healthy weight', 'weight calculator', 'bmi chart'],
-    inputs: [
-      {
-        id: 'units', label: 'Unit system', type: 'select', default: 'metric',
-        options: [{ value: 'metric', label: 'Metric (kg, cm)' }, { value: 'imperial', label: 'Imperial (lb, inches)' }]
-      },
-      { id: 'weight', label: 'Weight (kg or lb)', type: 'number', placeholder: 'e.g. 70', min: 0, step: 'any', required: true },
-      { id: 'height', label: 'Height (cm or inches)', type: 'number', placeholder: 'e.g. 175', min: 0, step: 'any', required: true }
-    ],
-    actionText: 'Calculate BMI',
-    execute: (v) => {
-      const H = TOOL_HELPERS;
-      const imperial = v.units === 'imperial';
-      const weight = H.needNum(v.weight, 'Weight', { positive: true });
-      const height = H.needNum(v.height, 'Height', { positive: true });
-      const kg = imperial ? weight * 0.45359237 : weight;
-      const m = imperial ? height * 0.0254 : height / 100;
-      if (m < 0.5 || m > 2.8) throw new Error('Please enter a realistic height.');
-      const bmi = kg / (m * m);
-      let category;
-      if (bmi < 18.5) category = 'Underweight';
-      else if (bmi < 25) category = 'Normal weight';
-      else if (bmi < 30) category = 'Overweight';
-      else if (bmi < 35) category = 'Obese (Class I)';
-      else if (bmi < 40) category = 'Obese (Class II)';
-      else category = 'Obese (Class III)';
-      const lowKg = 18.5 * m * m;
-      const highKg = 24.9 * m * m;
-      const range = imperial
-        ? H.fmt(lowKg / 0.45359237, 1) + ' – ' + H.fmt(highKg / 0.45359237, 1) + ' lb'
-        : H.fmt(lowKg, 1) + ' – ' + H.fmt(highKg, 1) + ' kg';
-      return {
-        text: 'Your BMI is ' + bmi.toFixed(1) + ' (' + category + ')',
-        stats: [
-          { label: 'BMI', value: bmi.toFixed(1) },
-          { label: 'Category (WHO)', value: category },
-          { label: 'Healthy weight range for your height', value: range }
-        ],
-        note: 'BMI is a general screening tool and does not account for muscle mass, age or body composition. It is not medical advice.'
-      };
-    }
-  },
-
-  {
-    id: 'age-calculator',
-    title: 'Age Calculator',
-    category: CAT.MATH,
-    icon: 'fa-solid fa-cake-candles',
-    desc: 'Find your exact age in years, months and days, plus total days lived and your next birthday.',
-    keywords: ['date of birth', 'how old am i', 'birthday calculator', 'age in days'],
-    inputs: [
-      { id: 'dob', label: 'Date of birth', type: 'date', required: true },
-      { id: 'asOf', label: 'Age at date (leave empty for today)', type: 'date' }
-    ],
-    actionText: 'Calculate Age',
-    execute: (v) => {
-      const H = TOOL_HELPERS;
-      const parse = (s) => {
-        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || '').trim());
-        if (!m) return null;
-        const y = +m[1], mo = +m[2], d = +m[3];
-        const dt = new Date(Date.UTC(y, mo - 1, d));
-        if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
-        return { y, m: mo, d };
-      };
-      const utc = (o) => Date.UTC(o.y, o.m - 1, o.d);
-      const dim = (y, m) => new Date(Date.UTC(y, m, 0)).getUTCDate(); // m is 1-12
-      const isLeap = (y) => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
-      const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-      const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-
-      const b = parse(v.dob);
-      if (!b) throw new Error('Please enter a valid date of birth.');
-      let t;
-      if (v.asOf && String(v.asOf).trim() !== '') {
-        t = parse(v.asOf);
-        if (!t) throw new Error('Please enter a valid "age at" date.');
-      } else {
-        const now = new Date();
-        t = { y: now.getFullYear(), m: now.getMonth() + 1, d: now.getDate() };
-      }
-      if (utc(b) > utc(t)) throw new Error('The date of birth must be before the "age at" date.');
-
-      let years = t.y - b.y;
-      let months = t.m - b.m;
-      let days = t.d - b.d;
-      if (days < 0) {
-        months--;
-        const pm = t.m === 1 ? { y: t.y - 1, m: 12 } : { y: t.y, m: t.m - 1 };
-        days += dim(pm.y, pm.m);
-      }
-      if (months < 0) { years--; months += 12; }
-
-      const totalDays = Math.round((utc(t) - utc(b)) / 86400000);
-      const birthdayIn = (year) => (b.m === 2 && b.d === 29 && !isLeap(year) ? { y: year, m: 3, d: 1 } : { y: year, m: b.m, d: b.d });
-      let next = birthdayIn(t.y);
-      if (utc(next) < utc(t)) next = birthdayIn(t.y + 1);
-      const untilNext = Math.round((utc(next) - utc(t)) / 86400000);
-      const nextDate = new Date(utc(next));
-      const bornDate = new Date(utc(b));
-
-      return {
-        text: 'Age: ' + years + ' years, ' + months + ' months, ' + days + ' days',
-        stats: [
-          { label: 'Years', value: String(years) },
-          { label: 'Total months', value: H.fmt(years * 12 + months) },
-          { label: 'Total weeks', value: H.fmt(Math.floor(totalDays / 7)) + ' weeks, ' + (totalDays % 7) + ' days' },
-          { label: 'Total days', value: H.fmt(totalDays) },
-          { label: 'Total hours', value: H.fmt(totalDays * 24) },
-          { label: 'Born on a', value: DAYS[bornDate.getUTCDay()] },
-          {
-            label: 'Next birthday',
-            value: (untilNext === 0 ? 'Today! 🎉' : 'in ' + untilNext + ' days') + ' (' + DAYS[nextDate.getUTCDay()] + ', ' + next.d + ' ' + MONTHS[next.m - 1] + ' ' + next.y + ')'
-          }
-        ]
-      };
-    }
-  },
-
-  {
-    id: 'compound-interest-calculator',
-    title: 'Compound Interest Calculator',
-    category: CAT.MATH,
-    icon: 'fa-solid fa-chart-line',
-    desc: 'See how your savings or investment grows with compound interest over time.',
-    keywords: ['investment growth', 'compounding', 'future value', 'savings calculator'],
-    inputs: [
-      { id: 'principal', label: 'Initial amount', type: 'number', placeholder: 'e.g. 100000', min: 0, step: 'any', required: true },
-      { id: 'rate', label: 'Annual interest rate (%)', type: 'number', placeholder: 'e.g. 8', min: 0, step: 'any', required: true },
-      { id: 'years', label: 'Time (years)', type: 'number', placeholder: 'e.g. 10', min: 0, step: 'any', required: true },
-      {
-        id: 'freq', label: 'Compounding frequency', type: 'select', default: '12',
-        options: [
-          { value: '1', label: 'Yearly' },
-          { value: '2', label: 'Half-yearly' },
-          { value: '4', label: 'Quarterly' },
-          { value: '12', label: 'Monthly' },
-          { value: '365', label: 'Daily' }
-        ]
-      }
-    ],
-    actionText: 'Calculate Growth',
-    execute: (v) => {
-      const H = TOOL_HELPERS;
-      const p = H.needNum(v.principal, 'Initial amount', { min: 0 });
-      const rate = H.needNum(v.rate, 'Annual interest rate (%)', { min: 0 });
-      const years = H.needNum(v.years, 'Time (years)', { min: 0 });
-      const n = Number(v.freq) || 12;
-      const r = rate / 100;
-      const amount = p * Math.pow(1 + r / n, n * years);
-      const effective = (Math.pow(1 + r / n, n) - 1) * 100;
-      return {
-        text: 'Final amount: ' + H.money(amount),
-        stats: [
-          { label: 'Initial amount', value: H.money(p) },
-          { label: 'Interest earned', value: H.money(amount - p) },
-          { label: 'Final amount', value: H.money(amount) },
-          { label: 'Effective annual rate', value: effective.toFixed(3) + '%' },
-          { label: 'Formula', value: 'A = P × (1 + r/n)^(n×t)' }
-        ]
-      };
-    }
-  },
-
-  {
-    id: 'emi-calculator',
-    title: 'EMI Loan Calculator',
-    category: CAT.MATH,
-    icon: 'fa-solid fa-building-columns',
-    desc: 'Calculate your monthly EMI, total interest and total repayment for any loan.',
-    keywords: ['loan calculator', 'home loan emi', 'car loan', 'monthly installment'],
-    inputs: [
-      { id: 'amount', label: 'Loan amount', type: 'number', placeholder: 'e.g. 2500000', min: 0, step: 'any', required: true },
-      { id: 'rate', label: 'Annual interest rate (%)', type: 'number', placeholder: 'e.g. 8.5', min: 0, step: 'any', required: true },
-      { id: 'tenure', label: 'Loan tenure', type: 'number', placeholder: 'e.g. 20', min: 0, step: 'any', required: true },
-      {
-        id: 'unit', label: 'Tenure unit', type: 'select', default: 'years',
-        options: [{ value: 'years', label: 'Years' }, { value: 'months', label: 'Months' }]
-      }
-    ],
-    actionText: 'Calculate EMI',
-    execute: (v) => {
-      const H = TOOL_HELPERS;
-      const principal = H.needNum(v.amount, 'Loan amount', { positive: true });
-      const rate = H.needNum(v.rate, 'Annual interest rate (%)', { min: 0 });
-      const tenure = H.needNum(v.tenure, 'Loan tenure', { positive: true });
-      const n = Math.round(v.unit === 'months' ? tenure : tenure * 12);
-      if (n < 1) throw new Error('Loan tenure must be at least 1 month.');
-      const r = rate / 12 / 100;
-      const emi = r === 0 ? principal / n : (principal * r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1);
-      const total = emi * n;
-      return {
-        text: 'Monthly EMI: ' + H.money(emi),
-        stats: [
-          { label: 'Monthly EMI', value: H.money(emi) },
-          { label: 'Number of payments', value: String(n) },
-          { label: 'Total interest', value: H.money(total - principal) },
-          { label: 'Total payment', value: H.money(total) },
-          { label: 'Interest share of total', value: ((total - principal) / total * 100).toFixed(1) + '%' }
-        ]
-      };
-    }
-  },
-
-  /* =======================================================================
-   * CONVERTERS
-   * ===================================================================== */
-  makeUnitConverter({
-    id: 'length-converter',
-    title: 'Length Converter',
-    icon: 'fa-solid fa-ruler',
-    desc: 'Convert between millimeters, centimeters, meters, kilometers, inches, feet, yards and miles.',
-    keywords: ['meters to feet', 'km to miles', 'inches to cm', 'distance converter'],
-    defaultFrom: 2,
-    defaultTo: 5,
-    units: [
-      { key: 'mm', label: 'Millimeter (mm)', symbol: 'mm', factor: 0.001 },
-      { key: 'cm', label: 'Centimeter (cm)', symbol: 'cm', factor: 0.01 },
-      { key: 'm', label: 'Meter (m)', symbol: 'm', factor: 1 },
-      { key: 'km', label: 'Kilometer (km)', symbol: 'km', factor: 1000 },
-      { key: 'in', label: 'Inch (in)', symbol: 'in', factor: 0.0254 },
-      { key: 'ft', label: 'Foot (ft)', symbol: 'ft', factor: 0.3048 },
-      { key: 'yd', label: 'Yard (yd)', symbol: 'yd', factor: 0.9144 },
-      { key: 'mi', label: 'Mile (mi)', symbol: 'mi', factor: 1609.344 },
-      { key: 'nmi', label: 'Nautical mile (nmi)', symbol: 'nmi', factor: 1852 }
-    ]
-  }),
-
-  makeUnitConverter({
-    id: 'weight-converter',
-    title: 'Weight Converter',
-    icon: 'fa-solid fa-weight-hanging',
-    desc: 'Convert between milligrams, grams, kilograms, tonnes, ounces, pounds and stones.',
-    keywords: ['kg to lb', 'pounds to kg', 'mass converter', 'grams to ounces'],
-    defaultFrom: 2,
-    defaultTo: 5,
-    units: [
-      { key: 'mg', label: 'Milligram (mg)', symbol: 'mg', factor: 0.000001 },
-      { key: 'g', label: 'Gram (g)', symbol: 'g', factor: 0.001 },
-      { key: 'kg', label: 'Kilogram (kg)', symbol: 'kg', factor: 1 },
-      { key: 't', label: 'Metric tonne (t)', symbol: 't', factor: 1000 },
-      { key: 'oz', label: 'Ounce (oz)', symbol: 'oz', factor: 0.028349523125 },
-      { key: 'lb', label: 'Pound (lb)', symbol: 'lb', factor: 0.45359237 },
-      { key: 'st', label: 'Stone (st)', symbol: 'st', factor: 6.35029318 }
-    ]
-  }),
-
-  {
-    id: 'temperature-converter',
-    title: 'Temperature Converter',
-    category: CAT.CONV,
-    icon: 'fa-solid fa-temperature-half',
-    desc: 'Convert between Celsius, Fahrenheit and Kelvin instantly.',
-    keywords: ['celsius to fahrenheit', 'fahrenheit to celsius', 'kelvin', 'temp converter'],
-    inputs: [
-      { id: 'value', label: 'Temperature', type: 'number', default: 25, step: 'any', required: true },
-      {
-        id: 'from', label: 'From', type: 'select', default: 'c',
-        options: [{ value: 'c', label: 'Celsius (°C)' }, { value: 'f', label: 'Fahrenheit (°F)' }, { value: 'k', label: 'Kelvin (K)' }]
-      },
-      {
-        id: 'to', label: 'To', type: 'select', default: 'f',
-        options: [{ value: 'c', label: 'Celsius (°C)' }, { value: 'f', label: 'Fahrenheit (°F)' }, { value: 'k', label: 'Kelvin (K)' }]
-      }
-    ],
-    actionText: 'Convert',
-    execute: (v) => {
-      const H = TOOL_HELPERS;
-      const value = H.needNum(v.value, 'Temperature');
-      const toC = { c: (x) => x, f: (x) => ((x - 32) * 5) / 9, k: (x) => x - 273.15 };
-      const fromC = { c: (x) => x, f: (x) => (x * 9) / 5 + 32, k: (x) => x + 273.15 };
-      const SYM = { c: '°C', f: '°F', k: 'K' };
-      const NAME = { c: 'Celsius', f: 'Fahrenheit', k: 'Kelvin' };
-      if (!toC[v.from] || !toC[v.to]) throw new Error('Please choose both units.');
-      const celsius = toC[v.from](value);
-      if (celsius < -273.15 - 1e-9) throw new Error('That temperature is below absolute zero.');
-      const result = fromC[v.to](celsius);
-      return {
-        text: H.fmtSig(value) + ' ' + SYM[v.from] + ' = ' + H.fmtSig(result) + ' ' + SYM[v.to],
-        stats: Object.keys(NAME).filter((k) => k !== v.from).map((k) => ({
-          label: NAME[k], value: H.fmtSig(fromC[k](celsius)) + ' ' + SYM[k]
-        }))
-      };
-    }
-  },
-
-  makeUnitConverter({
-    id: 'data-storage-converter',
-    title: 'Data Storage Converter',
-    icon: 'fa-solid fa-hard-drive',
-    desc: 'Convert bits, bytes, KB, MB, GB, TB and PB using binary (1024) or decimal (1000) standards.',
-    keywords: ['mb to gb', 'gb to tb', 'bytes converter', 'kilobytes to megabytes', 'file size converter'],
-    defaultFrom: 3,
-    defaultTo: 4,
-    units: [
-      { key: 'bit', label: 'Bit (b)', symbol: 'bit', factor: 0.125 },
-      { key: 'B', label: 'Byte (B)', symbol: 'B', factor: 1 },
-      { key: 'KB', label: 'Kilobyte (KB)', symbol: 'KB', factor: 1024 },
-      { key: 'MB', label: 'Megabyte (MB)', symbol: 'MB', factor: Math.pow(1024, 2) },
-      { key: 'GB', label: 'Gigabyte (GB)', symbol: 'GB', factor: Math.pow(1024, 3) },
-      { key: 'TB', label: 'Terabyte (TB)', symbol: 'TB', factor: Math.pow(1024, 4) },
-      { key: 'PB', label: 'Petabyte (PB)', symbol: 'PB', factor: Math.pow(1024, 5) }
-    ],
-    extraInputs: [
-      {
-        id: 'standard', label: 'Standard', type: 'select', default: 'binary',
-        options: [{ value: 'binary', label: 'Binary (1 KB = 1024 B)' }, { value: 'decimal', label: 'Decimal (1 KB = 1000 B)' }]
-      }
-    ],
-    unitsFor: (v) => {
-      const base = v.standard === 'decimal' ? 1000 : 1024;
-      const exps = { bit: null, B: 0, KB: 1, MB: 2, GB: 3, TB: 4, PB: 5 };
-      const meta = [
-        ['bit', 'Bit (b)'], ['B', 'Byte (B)'], ['KB', 'Kilobyte (KB)'], ['MB', 'Megabyte (MB)'],
-        ['GB', 'Gigabyte (GB)'], ['TB', 'Terabyte (TB)'], ['PB', 'Petabyte (PB)']
-      ];
-      return meta.map(([key, label]) => ({
-        key, label, symbol: key, factor: exps[key] === null ? 0.125 : Math.pow(base, exps[key])
-      }));
-    }
-  }),
-
-  makeUnitConverter({
-    id: 'speed-converter',
-    title: 'Speed Converter',
-    icon: 'fa-solid fa-gauge-high',
-    desc: 'Convert between km/h, mph, m/s, knots, feet per second and Mach.',
-    keywords: ['kmh to mph', 'mph to kmh', 'knots', 'velocity converter'],
-    defaultFrom: 1,
-    defaultTo: 2,
-    units: [
-      { key: 'ms', label: 'Meters per second (m/s)', symbol: 'm/s', factor: 1 },
-      { key: 'kmh', label: 'Kilometers per hour (km/h)', symbol: 'km/h', factor: 1 / 3.6 },
-      { key: 'mph', label: 'Miles per hour (mph)', symbol: 'mph', factor: 0.44704 },
-      { key: 'kn', label: 'Knots (kn)', symbol: 'kn', factor: 1852 / 3600 },
-      { key: 'fts', label: 'Feet per second (ft/s)', symbol: 'ft/s', factor: 0.3048 },
-      { key: 'mach', label: 'Mach (sea level, ≈340.29 m/s)', symbol: 'Mach', factor: 340.29 }
-    ]
-  }),
-
-  makeUnitConverter({
-    id: 'area-converter',
-    title: 'Area Converter',
-    icon: 'fa-solid fa-vector-square',
-    desc: 'Convert square meters, square feet, acres, hectares, square kilometers and more.',
-    keywords: ['sq ft to sq m', 'acres to hectares', 'land area converter', 'square meter'],
-    defaultFrom: 2,
-    defaultTo: 3,
-    units: [
-      { key: 'sqcm', label: 'Square centimeter (cm²)', symbol: 'cm²', factor: 0.0001 },
-      { key: 'sqin', label: 'Square inch (in²)', symbol: 'in²', factor: 0.00064516 },
-      { key: 'sqm', label: 'Square meter (m²)', symbol: 'm²', factor: 1 },
-      { key: 'sqft', label: 'Square foot (ft²)', symbol: 'ft²', factor: 0.09290304 },
-      { key: 'sqyd', label: 'Square yard (yd²)', symbol: 'yd²', factor: 0.83612736 },
-      { key: 'acre', label: 'Acre', symbol: 'ac', factor: 4046.8564224 },
-      { key: 'ha', label: 'Hectare (ha)', symbol: 'ha', factor: 10000 },
-      { key: 'sqkm', label: 'Square kilometer (km²)', symbol: 'km²', factor: 1000000 },
-      { key: 'sqmi', label: 'Square mile (mi²)', symbol: 'mi²', factor: 2589988.110336 }
-    ]
-  }),
-
-  /* =======================================================================
-   * SECURITY & WEB
-   * ===================================================================== */
-  {
-    id: 'password-generator',
-    title: 'Strong Password Generator',
-    category: CAT.SEC,
-    icon: 'fa-solid fa-shield-halved',
-    desc: 'Create secure, random passwords with a cryptographically strong generator. Nothing leaves your browser.',
-    keywords: ['random password', 'secure password', 'password maker', 'passphrase'],
-    inputs: [
-      { id: 'length', label: 'Password length', type: 'number', default: 16, min: 4, max: 128, step: 1, required: true },
-      { id: 'count', label: 'How many passwords?', type: 'number', default: 1, min: 1, max: 20, step: 1, required: true },
-      {
-        id: 'charset', label: 'Characters to include', type: 'select', default: 'all',
-        options: [
-          { value: 'all', label: 'Letters, numbers & symbols (strongest)' },
-          { value: 'alnum', label: 'Letters & numbers' },
-          { value: 'letters', label: 'Letters only' },
-          { value: 'numbers', label: 'Numbers only' }
-        ]
-      },
-      {
-        id: 'noLookalike', label: 'Avoid look-alike characters (O, 0, l, 1, I)', type: 'select', default: 'no',
-        options: [{ value: 'no', label: 'No' }, { value: 'yes', label: 'Yes' }]
-      }
-    ],
-    actionText: 'Generate Password',
-    execute: (v) => {
-      const H = TOOL_HELPERS;
-      const length = Math.floor(H.needNum(v.length, 'Password length', { min: 4, max: 128 }));
-      const count = Math.floor(H.needNum(v.count, 'How many passwords?', { min: 1, max: 20 }));
-      const SETS = {
-        upper: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
-        lower: 'abcdefghijklmnopqrstuvwxyz',
-        digit: '0123456789',
-        symbol: '!@#$%^&*()-_=+[]{};:,.<>?'
-      };
-      const groups = {
-        all: ['upper', 'lower', 'digit', 'symbol'],
-        alnum: ['upper', 'lower', 'digit'],
-        letters: ['upper', 'lower'],
-        numbers: ['digit']
-      }[v.charset] || ['upper', 'lower', 'digit', 'symbol'];
-
-      const strip = v.noLookalike === 'yes' ? (s) => s.replace(/[Il1O0o]/g, '') : (s) => s;
-      const pools = groups.map((g) => strip(SETS[g]));
-      const all = pools.join('');
-      const list = [];
-      for (let n = 0; n < count; n++) {
-        const chars = [];
-        if (length >= pools.length) {
-          pools.forEach((p) => chars.push(p[H.randomInt(p.length)]));
-        }
-        while (chars.length < length) chars.push(all[H.randomInt(all.length)]);
-        list.push(H.shuffle(chars).join(''));
-      }
-      const entropy = length * Math.log2(all.length);
-      const strength = entropy < 40 ? 'Weak' : entropy < 60 ? 'Fair' : entropy < 80 ? 'Strong' : 'Very strong';
-      return {
-        text: list.join('\n'),
-        stats: [
-          { label: 'Length', value: String(length) },
-          { label: 'Character pool', value: all.length + ' characters' },
-          { label: 'Estimated entropy', value: '≈ ' + Math.round(entropy) + ' bits' },
-          { label: 'Strength', value: strength }
-        ],
-        note: 'Passwords are generated locally in your browser using the Web Crypto API and are never sent or stored.'
-      };
-    }
-  },
-
-  {
-    id: 'hash-generator',
-    title: 'MD5 / SHA Hash Generator',
-    category: CAT.SEC,
-    icon: 'fa-solid fa-hashtag',
-    desc: 'Generate MD5, SHA-1 and SHA-256 hashes from any text, fully in your browser.',
-    keywords: ['md5 hash', 'sha256', 'sha1', 'checksum', 'hash calculator'],
-    inputs: [
-      { id: 'text', label: 'Text to hash', type: 'textarea', rows: 6, placeholder: 'Enter text...', required: true },
-      {
-        id: 'algo', label: 'Algorithm', type: 'select', default: 'md5',
-        options: [
-          { value: 'md5', label: 'MD5' },
-          { value: 'sha1', label: 'SHA-1' },
-          { value: 'sha256', label: 'SHA-256' },
-          { value: 'all', label: 'All algorithms' }
-        ]
-      },
-      {
-        id: 'letterCase', label: 'Output case', type: 'select', default: 'lower',
-        options: [{ value: 'lower', label: 'lowercase hex' }, { value: 'upper', label: 'UPPERCASE hex' }]
-      }
-    ],
-    actionText: 'Generate Hash',
-    execute: (v) => {
-      const H = TOOL_HELPERS;
-      const text = H.needText(v.text, 'some text to hash');
-      const bytes = H.utf8(text);
-      const up = v.letterCase === 'upper';
-      const out = (s) => (up ? s.toUpperCase() : s);
-      const NAMES = { md5: 'MD5', sha1: 'SHA-1', sha256: 'SHA-256' };
-      const result = v.algo === 'all'
-        ? ['md5', 'sha1', 'sha256'].map((a) => NAMES[a] + ': ' + out(HASH_ALGORITHMS[a](bytes))).join('\n')
-        : out((HASH_ALGORITHMS[v.algo] || HASH_ALGORITHMS.md5)(bytes));
-      return {
-        text: result,
-        stats: [{ label: 'Input size', value: bytes.length + ' bytes' }],
-        note: 'MD5 and SHA-1 are fine for checksums but are not secure for storing passwords.'
-      };
-    }
-  },
-
-  {
-    id: 'meta-tag-generator',
-    title: 'Meta Tag Generator',
-    category: CAT.SEC,
-    icon: 'fa-solid fa-tag',
-    desc: 'Generate SEO meta tags, Open Graph and Twitter Card tags to paste into your page head.',
-    keywords: ['seo meta tags', 'open graph generator', 'twitter card', 'html head tags'],
-    inputs: [
-      { id: 'title', label: 'Page title', type: 'text', placeholder: 'e.g. Free Online Tools - MySite', required: true },
-      { id: 'description', label: 'Meta description', type: 'textarea', rows: 3, placeholder: 'A short summary of the page (70-160 characters)', required: true },
-      { id: 'keywords', label: 'Keywords (comma separated)', type: 'text', placeholder: 'tools, converter, calculator' },
-      { id: 'author', label: 'Author', type: 'text', placeholder: 'Your name or brand' },
-      { id: 'url', label: 'Canonical page URL', type: 'text', placeholder: 'https://example.com/page/' },
-      { id: 'image', label: 'Social share image URL', type: 'text', placeholder: 'https://example.com/share.jpg' },
-      { id: 'siteName', label: 'Site name', type: 'text', placeholder: 'QuickToolHub' },
-      {
-        id: 'robots', label: 'Robots', type: 'select', default: 'index, follow',
-        options: [
-          { value: 'index, follow', label: 'index, follow (recommended)' },
-          { value: 'noindex, follow', label: 'noindex, follow' },
-          { value: 'index, nofollow', label: 'index, nofollow' },
-          { value: 'noindex, nofollow', label: 'noindex, nofollow' }
-        ]
-      },
-      {
-        id: 'twitterCard', label: 'Twitter card type', type: 'select', default: 'summary_large_image',
-        options: [{ value: 'summary_large_image', label: 'Summary with large image' }, { value: 'summary', label: 'Summary' }]
-      }
-    ],
-    actionText: 'Generate Meta Tags',
-    execute: (v) => {
-      const H = TOOL_HELPERS;
-      const clean = (s) => String(s === undefined || s === null ? '' : s).trim();
-      const esc = (s) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      const escText = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-      const title = clean(H.needText(v.title, 'a page title'));
-      const description = clean(H.needText(v.description, 'a meta description')).replace(/\s+/g, ' ');
-      const keywords = clean(v.keywords);
-      const author = clean(v.author);
-      const url = clean(v.url);
-      const image = clean(v.image);
-      const siteName = clean(v.siteName);
-      const urlRe = /^https?:\/\/\S+$/i;
-      if (url && !urlRe.test(url)) throw new Error('The canonical URL must start with http:// or https://');
-      if (image && !urlRe.test(image)) throw new Error('The image URL must start with http:// or https://');
-
-      const L = [];
-      L.push('<meta charset="UTF-8">');
-      L.push('<meta name="viewport" content="width=device-width, initial-scale=1.0">');
-      L.push('<title>' + escText(title) + '</title>');
-      L.push('<meta name="description" content="' + esc(description) + '">');
-      if (keywords) L.push('<meta name="keywords" content="' + esc(keywords) + '">');
-      if (author) L.push('<meta name="author" content="' + esc(author) + '">');
-      L.push('<meta name="robots" content="' + esc(v.robots || 'index, follow') + '">');
-      if (url) L.push('<link rel="canonical" href="' + esc(url) + '">');
-      L.push('');
-      L.push('<!-- Open Graph / Facebook -->');
-      L.push('<meta property="og:type" content="website">');
-      L.push('<meta property="og:title" content="' + esc(title) + '">');
-      L.push('<meta property="og:description" content="' + esc(description) + '">');
-      if (url) L.push('<meta property="og:url" content="' + esc(url) + '">');
-      if (image) L.push('<meta property="og:image" content="' + esc(image) + '">');
-      if (siteName) L.push('<meta property="og:site_name" content="' + esc(siteName) + '">');
-      L.push('');
-      L.push('<!-- Twitter -->');
-      L.push('<meta name="twitter:card" content="' + esc(v.twitterCard || 'summary_large_image') + '">');
-      L.push('<meta name="twitter:title" content="' + esc(title) + '">');
-      L.push('<meta name="twitter:description" content="' + esc(description) + '">');
-      if (image) L.push('<meta name="twitter:image" content="' + esc(image) + '">');
-
-      return {
-        text: L.join('\n'),
-        stats: [
-          { label: 'Title length', value: title.length + ' characters ' + (title.length <= 60 ? '✔ good' : '⚠ may be truncated in search results (aim for 60 or fewer)') },
-          { label: 'Description length', value: description.length + ' characters ' + (description.length >= 70 && description.length <= 160 ? '✔ good' : description.length > 160 ? '⚠ may be truncated (aim for 160 or fewer)' : '⚠ a bit short (aim for 70-160)') }
-        ]
-      };
-    }
-  }
-];
-
-/* ===========================================================================
- * Registry helpers used by the engine / homepage
- * ========================================================================= */
-const getToolById = (id) => ALL_TOOLS.find((t) => t.id === id) || null;
-
-const getToolsByCategory = (name) => ALL_TOOLS.filter((t) => t.category === name);
-
-const searchTools = (query) => {
-  const q = String(query || '').trim().toLowerCase();
-  if (!q) return ALL_TOOLS.slice();
-  return ALL_TOOLS.filter((t) =>
-    (t.title + ' ' + t.desc + ' ' + t.category + ' ' + (t.keywords || []).join(' ')).toLowerCase().includes(q)
-  );
+/* ---------- shared helpers ---------- */
+const S = v => (v === undefined || v === null) ? '' : String(v);
+const nv = v => parseFloat(S(v).replace(/,/g, ''));
+const bad = (...a) => a.some(x => !isFinite(x));
+const ERR = 'Please enter valid numeric values.';
+const fmt = (n, d) => { if (!isFinite(n)) return String(n); if (n === 0) return '0'; const a = Math.abs(n); if (a >= 1e21 || a < 1e-9) return n.toExponential(6); return String(parseFloat(n.toPrecision(d || 12))); };
+const money = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const ic = n => 'fa-solid fa-' + n;
+const lines = s => S(s).split(/\r?\n/);
+const pad = (n, l) => String(n).padStart(l || 2, '0');
+const nums = s => S(s).split(/[\s,;]+/).filter(x => x !== '').map(Number).filter(Number.isFinite);
+const slug = s => S(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+const cap = x => x.charAt(0).toUpperCase() + x.slice(1).toLowerCase();
+const hasCrypto = typeof crypto !== 'undefined' && crypto.getRandomValues;
+const rnd = n => {
+  if (!hasCrypto) return Math.floor(Math.random() * n);
+  const m = Math.floor(4294967296 / n) * n, a = new Uint32Array(1);
+  do { crypto.getRandomValues(a); } while (a[0] >= m);
+  return a[0] % n;
 };
+const pick = a => a[rnd(a.length)];
+const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = rnd(i + 1); const t = a[i]; a[i] = a[j]; a[j] = t; } return a; };
+const randBytes = n => { const b = new Uint8Array(n); if (hasCrypto) crypto.getRandomValues(b); else for (let i = 0; i < n; i++) b[i] = Math.floor(Math.random() * 256); return b; };
+const toHex = b => Array.from(b).map(x => x.toString(16).padStart(2, '0')).join('');
+const utf8 = s => new TextEncoder().encode(S(s));
+const gcd = (a, b) => { a = Math.abs(a); b = Math.abs(b); while (b) { const t = a % b; a = b; b = t; } return a; };
+const add = (id, title, category, icon, desc, inputs, actionText, execute) => { L.push({ id, title, category, icon, desc, inputs, actionText, execute }); };
+const one = (cat, id, title, icon, desc, fn, action, label, ph) => add(id, title, cat, ic(icon), desc, [ta('text', label || 'Your Text', ph || 'Paste your text here...')], action || 'Convert', i => fn(S(i.text), i));
+const wordsOf = s => S(s).replace(/([\p{Ll}\p{N}])(\p{Lu})/gu, '$1 $2').split(/[^\p{L}\p{N}\p{M}]+/u).filter(Boolean);
+const escRe = s => s.replace(/[.*+?^${}()|[\]\\\/-]/g, '\\$&');
 
-/* Dev-time sanity check: warns about duplicate ids or malformed entries. */
-(function validateToolsData() {
-  const seen = new Set();
-  const cats = new Set(TOOL_CATEGORIES.map((c) => c.name));
-  ALL_TOOLS.forEach((t, i) => {
-    const where = 'ALL_TOOLS[' + i + '] (' + (t && t.id) + ')';
-    if (!t || !t.id || !t.title || !t.category || !t.icon || !t.desc || !Array.isArray(t.inputs) || !t.actionText || typeof t.execute !== 'function') {
-      console.warn('[tools-data] Missing required field in ' + where);
-      return;
-    }
-    if (seen.has(t.id)) console.warn('[tools-data] Duplicate id: ' + t.id);
-    seen.add(t.id);
-    if (!cats.has(t.category)) console.warn('[tools-data] Unknown category "' + t.category + '" in ' + where);
+/* ---------- base64 / utf8 helpers ---------- */
+const b64enc = s => { const b = utf8(s); let r = ''; for (let i = 0; i < b.length; i += 8192) r += String.fromCharCode.apply(null, b.subarray(i, i + 8192)); return btoa(r); };
+const b64dec = s => { s = S(s).trim().replace(/-/g, '+').replace(/_/g, '/').replace(/\s+/g, ''); while (s.length % 4) s += '='; const bin = atob(s); const b = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i); return new TextDecoder().decode(b); };
+
+/* ---------- date helpers (all UTC-midnight based) ---------- */
+const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const pd = s => {
+  s = S(s).trim(); let m, y, mo, d;
+  if ((m = s.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})$/))) { y = +m[1]; mo = +m[2]; d = +m[3]; }
+  else if ((m = s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})$/))) { d = +m[1]; mo = +m[2]; y = +m[3]; }
+  else return null;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+  return dt;
+};
+const fd = d => d.toISOString().slice(0, 10);
+const today = () => { const n = new Date(); return new Date(Date.UTC(n.getFullYear(), n.getMonth(), n.getDate())); };
+const DAY = 86400000;
+const isLeap = y => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+const dim = (y, m) => new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+const ymd = (a, b) => {
+  let y = b.getUTCFullYear() - a.getUTCFullYear(), m = b.getUTCMonth() - a.getUTCMonth(), d = b.getUTCDate() - a.getUTCDate();
+  if (d < 0) { m--; d += dim(b.getUTCFullYear(), b.getUTCMonth() - 1 < 0 ? -1 : b.getUTCMonth() - 1) || 30; }
+  if (m < 0) { y--; m += 12; }
+  return [y, m, d];
+};
+const DERR = 'Please enter a valid date (YYYY-MM-DD or DD/MM/YYYY).';
+const ptime = s => { const m = S(s).trim().match(/^(\d{1,2}):(\d{2})\s*(am|pm)?$/i); if (!m) return null; let h = +m[1]; const mi = +m[2]; if (m[3]) { const p = m[3].toLowerCase(); if (h === 12) h = 0; if (p === 'pm') h += 12; } if (h > 23 || mi > 59) return null; return h * 60 + mi; };
+
+/* =====================================================================
+   1. TEXT & CONTENT UTILITIES
+   ===================================================================== */
+const T = CAT.TEXT;
+
+// --- case converters (generated) ---
+[
+  ['uppercase', 'UPPERCASE Converter', 'arrow-up-a-z', s => s.toUpperCase()],
+  ['lowercase', 'lowercase Converter', 'arrow-down-a-z', s => s.toLowerCase()],
+  ['title-case', 'Title Case Converter', 'heading', s => s.toLowerCase().replace(/(^|[\s\-("])(\p{L})/gu, (m, a, b) => a + b.toUpperCase())],
+  ['sentence-case', 'Sentence Case Converter', 'font', s => s.toLowerCase().replace(/(^\s*|[.!?]\s+|\n\s*)(\p{L})/gu, (m, a, b) => a + b.toUpperCase())],
+  ['capitalize-words', 'Capitalize Each Word', 'text-height', s => s.replace(/(^|\s)(\p{L})/gu, (m, a, b) => a + b.toUpperCase())],
+  ['camel-case', 'camelCase Converter', 'code', s => wordsOf(s).map((x, i) => i ? cap(x) : x.toLowerCase()).join('')],
+  ['pascal-case', 'PascalCase Converter', 'code', s => wordsOf(s).map(cap).join('')],
+  ['snake-case', 'snake_case Converter', 'code', s => wordsOf(s).map(x => x.toLowerCase()).join('_')],
+  ['kebab-case', 'kebab-case Converter', 'code', s => wordsOf(s).map(x => x.toLowerCase()).join('-')],
+  ['constant-case', 'CONSTANT_CASE Converter', 'code', s => wordsOf(s).map(x => x.toUpperCase()).join('_')],
+  ['dot-case', 'dot.case Converter', 'code', s => wordsOf(s).map(x => x.toLowerCase()).join('.')],
+  ['path-case', 'path/case Converter', 'code', s => wordsOf(s).map(x => x.toLowerCase()).join('/')],
+  ['train-case', 'Train-Case Converter', 'code', s => wordsOf(s).map(cap).join('-')],
+  ['alternating-case', 'aLtErNaTiNg CaSe Converter', 'shuffle', s => [...s].map((c, i) => i % 2 ? c.toLowerCase() : c.toUpperCase()).join('')],
+  ['inverse-case', 'Inverse Case Converter', 'right-left', s => [...s].map(c => c === c.toUpperCase() ? c.toLowerCase() : c.toUpperCase()).join('')]
+].forEach(c => one(T, c[0], c[1], c[2], 'Convert your text to ' + c[1].replace(' Converter', '') + ' instantly.', c[3], 'Convert'));
+
+// --- counters & analysis ---
+const stats = s => ({
+  w: s.trim() ? s.trim().split(/\s+/).length : 0, c: [...s].length, cn: [...s.replace(/\s/g, '')].length,
+  l: s ? lines(s).length : 0, sn: (s.match(/[^.!?]+[.!?]+(\s|$)/g) || (s.trim() ? [s] : [])).length,
+  p: s.trim() ? s.trim().split(/\n\s*\n/).length : 0
+});
+one(T, 'word-counter', 'Word Counter', 'file-word', 'Count words, characters, sentences, paragraphs and lines.', s => { const t = stats(s); return `Words: ${t.w}\nCharacters (with spaces): ${t.c}\nCharacters (no spaces): ${t.cn}\nSentences: ${t.sn}\nParagraphs: ${t.p}\nLines: ${t.l}`; }, 'Count');
+one(T, 'character-counter', 'Character Counter', 'a', 'Count characters with and without spaces.', s => { const t = stats(s); return `Characters (with spaces): ${t.c}\nCharacters (no spaces): ${t.cn}\nLetters: ${(s.match(/\p{L}/gu) || []).length}\nDigits: ${(s.match(/\p{N}/gu) || []).length}`; }, 'Count');
+one(T, 'line-counter', 'Line Counter', 'list-ol', 'Count total, non-empty and empty lines.', s => { const a = s ? lines(s) : []; const ne = a.filter(x => x.trim()).length; return `Total lines: ${a.length}\nNon-empty lines: ${ne}\nEmpty lines: ${a.length - ne}`; }, 'Count');
+one(T, 'sentence-counter', 'Sentence Counter', 'quote-left', 'Count the sentences in your text.', s => 'Sentences: ' + stats(s).sn, 'Count');
+one(T, 'paragraph-counter', 'Paragraph Counter', 'paragraph', 'Count the paragraphs in your text.', s => 'Paragraphs: ' + stats(s).p, 'Count');
+one(T, 'unique-word-counter', 'Unique Word Counter', 'fingerprint', 'Count total and unique words (case-insensitive).', s => { const w = wordsOf(s.toLowerCase()); return `Total words: ${w.length}\nUnique words: ${new Set(w).size}`; }, 'Count');
+one(T, 'reading-time-estimator', 'Reading Time Estimator', 'book-open-reader', 'Estimate how long your text takes to read (200 wpm).', s => { const w = stats(s).w, m = w / 200; return `Words: ${w}\nEstimated reading time: ${m < 1 ? 'less than 1 minute' : Math.ceil(m) + ' minute(s)'} (${Math.round(m * 60)} seconds at 200 wpm)`; }, 'Estimate');
+one(T, 'speaking-time-estimator', 'Speaking Time Estimator', 'microphone', 'Estimate speech duration for a script (130 wpm).', s => { const w = stats(s).w, sec = Math.round(w / 130 * 60); return `Words: ${w}\nSpeaking time: ${Math.floor(sec / 60)} min ${sec % 60} sec (at 130 wpm)`; }, 'Estimate', 'Your Script');
+one(T, 'character-frequency', 'Character Frequency Counter', 'chart-simple', 'See how often each character appears.', s => { const m = {}; let t = 0; [...s].forEach(c => { if (/\s/.test(c)) return; m[c] = (m[c] || 0) + 1; t++; }); return Object.entries(m).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(e => `${e[0]} : ${e[1]} (${(e[1] / t * 100).toFixed(2)}%)`).join('\n') || 'No characters found.'; }, 'Analyze');
+one(T, 'word-frequency', 'Word Frequency Counter', 'chart-column', 'Find the most frequently used words.', s => { const m = {}; const w = wordsOf(s.toLowerCase()); w.forEach(x => m[x] = (m[x] || 0) + 1); return Object.entries(m).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 100).map(e => `${e[0]} : ${e[1]} (${(e[1] / w.length * 100).toFixed(2)}%)`).join('\n') || 'No words found.'; }, 'Analyze');
+add('count-occurrences', 'Count Occurrences of Text', T, ic('magnifying-glass-chart'), 'Count how many times a word or phrase appears.', [ta('text', 'Your Text', 'Paste text...'), tx('find', 'Word or phrase', 'e.g. the'), sl('mode', 'Match type', ['Ignore case', 'Case-sensitive'])], 'Count', i => { const f = S(i.find); if (!f) return 'Enter a word or phrase to search.'; const n = (S(i.text).match(new RegExp(escRe(f), i.mode === 'Case-sensitive' ? 'g' : 'gi')) || []).length; return `"${f}" appears ${n} time(s).`; });
+one(T, 'vowel-consonant-counter', 'Vowel & Consonant Counter', 'language', 'Count vowels, consonants, digits and symbols.', s => { const v = (s.match(/[aeiou]/gi) || []).length, c = (s.match(/[b-df-hj-np-tv-z]/gi) || []).length, d = (s.match(/\d/g) || []).length; return `Vowels: ${v}\nConsonants: ${c}\nDigits: ${d}\nOther characters: ${[...s].length - v - c - d}`; }, 'Count');
+
+// --- cleaning ---
+one(T, 'remove-duplicate-lines', 'Duplicate Line Remover', 'clone', 'Remove repeated lines and keep the first occurrence.', s => { const seen = new Set(); return lines(s).filter(l => !seen.has(l) && seen.add(l)).join('\n'); }, 'Remove Duplicates');
+one(T, 'remove-duplicate-words', 'Duplicate Word Remover', 'eraser', 'Remove repeated words (case-insensitive) from text.', s => { const seen = new Set(); return s.split(/\s+/).filter(w => { const k = w.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; }).join(' '); }, 'Remove Duplicates');
+one(T, 'remove-empty-lines', 'Empty Line Remover', 'filter', 'Delete blank lines from your text.', s => lines(s).filter(l => l.trim()).join('\n'), 'Clean');
+one(T, 'whitespace-cleaner', 'Whitespace Cleaner', 'broom', 'Trim lines and collapse repeated spaces and tabs.', s => lines(s).map(l => l.replace(/[ \t]+/g, ' ').trim()).join('\n').trim(), 'Clean');
+one(T, 'remove-extra-spaces', 'Extra Space Remover', 'text-width', 'Replace multiple spaces with a single space.', s => s.replace(/[ \t]{2,}/g, ' '), 'Clean');
+one(T, 'remove-line-breaks', 'Line Break Remover', 'grip-lines', 'Join all lines into a single line.', s => s.replace(/\s*[\r\n]+\s*/g, ' ').trim(), 'Remove Breaks');
+one(T, 'remove-punctuation', 'Punctuation Remover', 'ban', 'Strip punctuation marks from text.', s => s.replace(/[\p{P}\p{S}]/gu, ''), 'Clean');
+one(T, 'remove-numbers', 'Number Remover', 'hashtag', 'Remove all digits from your text.', s => s.replace(/\p{N}/gu, ''), 'Clean');
+one(T, 'remove-accents', 'Accent Remover', 'language', 'Convert accented letters to plain ASCII letters.', s => s.normalize('NFD').replace(/[\u0300-\u036f]/g, ''), 'Clean');
+one(T, 'strip-html-tags', 'HTML Tag Stripper', 'code', 'Remove HTML tags and keep the text.', s => s.replace(/<(script|style)[\s\S]*?<\/\1>/gi, '').replace(/<[^>]*>/g, '').replace(/\n{3,}/g, '\n\n').trim(), 'Strip Tags', 'HTML');
+
+// --- reverse / sort / transform ---
+one(T, 'reverse-text', 'Reverse Text', 'arrow-right-arrow-left', 'Reverse the entire text, character by character.', s => [...s].reverse().join(''), 'Reverse');
+one(T, 'reverse-words', 'Reverse Words', 'arrows-left-right', 'Reverse the order of words in each line.', s => lines(s).map(l => l.split(/\s+/).reverse().join(' ')).join('\n'), 'Reverse');
+one(T, 'reverse-lines', 'Reverse Lines', 'arrows-up-down', 'Reverse the order of lines.', s => lines(s).reverse().join('\n'), 'Reverse');
+one(T, 'sort-lines-az', 'Sort Lines A-Z', 'arrow-down-a-z', 'Sort lines alphabetically.', s => lines(s).sort((a, b) => a.localeCompare(b)).join('\n'), 'Sort');
+one(T, 'sort-lines-za', 'Sort Lines Z-A', 'arrow-down-z-a', 'Sort lines in reverse alphabetical order.', s => lines(s).sort((a, b) => b.localeCompare(a)).join('\n'), 'Sort');
+one(T, 'sort-lines-length', 'Sort Lines by Length', 'arrow-down-short-wide', 'Sort lines from shortest to longest.', s => lines(s).sort((a, b) => a.length - b.length).join('\n'), 'Sort');
+one(T, 'sort-numbers', 'Sort Numbers', 'arrow-down-1-9', 'Sort a list of numbers in ascending order.', s => nums(s).sort((a, b) => a - b).join('\n') || 'No numbers found.', 'Sort', 'Numbers', 'One per line or comma-separated');
+one(T, 'shuffle-lines', 'Random Line Shuffler', 'shuffle', 'Randomly shuffle the order of lines.', s => shuffle(lines(s)).join('\n'), 'Shuffle');
+one(T, 'add-line-numbers', 'Add Line Numbers', 'list-ol', 'Prefix every line with its line number.', s => lines(s).map((l, i) => (i + 1) + '. ' + l).join('\n'), 'Number Lines');
+one(T, 'slugify', 'Slug Generator (Slugify)', 'link', 'Turn any title into a clean URL slug.', s => s.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^\p{L}\p{N}\p{M}]+/gu, '-').replace(/^-+|-+$/g, ''), 'Generate Slug', 'Title');
+one(T, 'palindrome-checker', 'Palindrome Checker', 'repeat', 'Check whether text reads the same backwards.', s => { const c = s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, ''); if (!c) return 'Enter some text.'; return c === [...c].reverse().join('') ? 'Yes, it is a palindrome.' : 'No, it is not a palindrome.'; }, 'Check');
+one(T, 'text-to-bullet-list', 'Lines to Bullet List', 'list', 'Convert lines to a Markdown bullet list.', s => lines(s).filter(l => l.trim()).map(l => '- ' + l.trim()).join('\n'), 'Convert');
+one(T, 'lines-to-comma', 'Lines to Comma-Separated', 'ellipsis', 'Join lines into one comma-separated list.', s => lines(s).map(l => l.trim()).filter(Boolean).join(', '), 'Convert');
+one(T, 'comma-to-lines', 'Comma-Separated to Lines', 'bars', 'Split a comma-separated list into lines.', s => s.split(',').map(x => x.trim()).filter(Boolean).join('\n'), 'Convert');
+add('text-repeater', 'Text Repeater', T, ic('copy'), 'Repeat text any number of times with a separator.', [ta('text', 'Text to repeat', 'Hello'), nm('count', 'Repeat count', '5'), tx('sep', 'Separator', '(blank = none; use \\n for newline)')], 'Repeat', i => { const n = Math.min(Math.max(parseInt(i.count) || 0, 0), 10000); const sep = S(i.sep).replace(/\\n/g, '\n').replace(/\\t/g, '\t'); return Array(n).fill(S(i.text)).join(sep); });
+add('word-wrap', 'Text Wrapper (Word Wrap)', T, ic('align-left'), 'Wrap long lines at a fixed column width.', [ta('text', 'Your Text', 'Long text...'), nm('width', 'Max characters per line', '60')], 'Wrap', i => { const w = Math.max(5, parseInt(i.width) || 60); return lines(i.text).map(l => { const out = []; let cur = ''; l.split(/\s+/).forEach(x => { if ((cur + ' ' + x).trim().length > w && cur) { out.push(cur); cur = x; } else cur = (cur + ' ' + x).trim(); }); out.push(cur); return out.join('\n'); }).join('\n'); });
+add('prefix-suffix-appender', 'Prefix & Suffix Appender', T, ic('plus'), 'Add a prefix and/or suffix to every line.', [ta('text', 'Your Lines', 'one\ntwo'), tx('prefix', 'Prefix', 'e.g. <li>'), tx('suffix', 'Suffix', 'e.g. </li>')], 'Apply', i => lines(i.text).map(l => S(i.prefix) + l + S(i.suffix)).join('\n'));
+add('find-and-replace', 'Find and Replace', T, ic('magnifying-glass'), 'Find and replace text, optionally with regular expressions.', [ta('text', 'Your Text', 'Paste text...'), tx('find', 'Find', 'text to find'), tx('replace', 'Replace with', 'replacement'), sl('mode', 'Mode', ['Plain (case-sensitive)', 'Plain (ignore case)', 'Regular expression'])], 'Replace', i => { try { const f = S(i.find); if (!f) return 'Enter text to find.'; const re = i.mode === 'Regular expression' ? new RegExp(f, 'g') : new RegExp(escRe(f), i.mode === 'Plain (ignore case)' ? 'gi' : 'g'); return S(i.text).replace(re, S(i.replace)); } catch (e) { return 'Invalid pattern: ' + e.message; } });
+add('caesar-cipher', 'Caesar Cipher', T, ic('lock'), 'Encrypt or decrypt text with a Caesar shift.', [ta('text', 'Your Text', 'Hello'), nm('shift', 'Shift (1-25)', '3'), sl('dir', 'Direction', ['Encrypt', 'Decrypt'])], 'Apply', i => { let k = (parseInt(i.shift) || 0) % 26; if (i.dir === 'Decrypt') k = (26 - k) % 26; return S(i.text).replace(/[a-z]/gi, c => { const b = c <= 'Z' ? 65 : 97; return String.fromCharCode((c.charCodeAt(0) - b + k) % 26 + b); }); });
+one(T, 'rot13', 'ROT13 Encoder / Decoder', 'rotate', 'Apply ROT13 (same operation encodes and decodes).', s => s.replace(/[a-z]/gi, c => { const b = c <= 'Z' ? 65 : 97; return String.fromCharCode((c.charCodeAt(0) - b + 13) % 26 + b); }), 'Apply ROT13');
+one(T, 'atbash-cipher', 'Atbash Cipher', 'key', 'Encode or decode with the Atbash mirror cipher.', s => s.replace(/[a-z]/gi, c => { const b = c <= 'Z' ? 65 : 97; return String.fromCharCode(b + 25 - (c.charCodeAt(0) - b)); }), 'Apply');
+
+// --- encoders ---
+one(T, 'text-to-binary', 'Text to Binary', 'binary', 'Convert text to 8-bit binary code.', s => Array.from(utf8(s)).map(b => b.toString(2).padStart(8, '0')).join(' '), 'Convert');
+one(T, 'binary-to-text', 'Binary to Text', 'binary', 'Decode binary code back into text.', s => { const b = s.replace(/[^01]/g, ''); if (!b || b.length % 8) return 'Invalid binary: length must be a multiple of 8 bits.'; const a = new Uint8Array(b.length / 8); for (let i = 0; i < a.length; i++) a[i] = parseInt(b.substr(i * 8, 8), 2); return new TextDecoder().decode(a); }, 'Convert', 'Binary', '01001000 01101001');
+one(T, 'text-to-hex', 'Text to Hex', 'hashtag', 'Convert text to hexadecimal bytes.', s => Array.from(utf8(s)).map(b => b.toString(16).padStart(2, '0')).join(' '), 'Convert');
+one(T, 'hex-to-text', 'Hex to Text', 'hashtag', 'Decode hexadecimal bytes into text.', s => { const h = s.replace(/0x/gi, '').replace(/[^0-9a-f]/gi, ''); if (!h || h.length % 2) return 'Invalid hex: need an even number of hex digits.'; const a = new Uint8Array(h.length / 2); for (let i = 0; i < a.length; i++) a[i] = parseInt(h.substr(i * 2, 2), 16); return new TextDecoder().decode(a); }, 'Convert', 'Hex', '48 65 6c 6c 6f');
+one(T, 'text-to-ascii', 'Text to ASCII Codes', 'barcode', 'Convert characters to their Unicode code points.', s => [...s].map(c => c.codePointAt(0)).join(' '), 'Convert');
+one(T, 'ascii-to-text', 'ASCII Codes to Text', 'barcode', 'Convert decimal character codes into text.', s => { const n = nums(s); try { return String.fromCodePoint(...n); } catch (e) { return 'Invalid code point.'; } }, 'Convert', 'Codes', '72 101 108 108 111');
+one(T, 'text-to-unicode-escape', 'Text to Unicode Escape', 'u', 'Convert text to \\uXXXX escape sequences.', s => [...s].map(c => { const p = c.codePointAt(0); return p > 0xFFFF ? '\\u{' + p.toString(16) + '}' : '\\u' + p.toString(16).padStart(4, '0'); }).join(''), 'Convert');
+
+// --- Morse ---
+const MORSE = {}; 'A .-|B -...|C -.-.|D -..|E .|F ..-.|G --.|H ....|I ..|J .---|K -.-|L .-..|M --|N -.|O ---|P .--.|Q --.-|R .-.|S ...|T -|U ..-|V ...-|W .--|X -..-|Y -.--|Z --..|0 -----|1 .----|2 ..---|3 ...--|4 ....-|5 .....|6 -....|7 --...|8 ---..|9 ----.|. .-.-.-|, --..--|? ..--..|\' .----.|! -.-.--|/ -..-.|( -.--.|) -.--.-|& .-...|: ---...|; -.-.-.|= -...-|+ .-.-.|- -....-|_ ..--.-|" .-..-.|@ .--.-.'.split('|').forEach(e => { MORSE[e[0]] = e.slice(2); });
+const MORSE_REV = {}; Object.keys(MORSE).forEach(k => MORSE_REV[MORSE[k]] = k);
+const toMorse = s => S(s).toUpperCase().split(/\s+/).filter(Boolean).map(w => [...w].map(c => MORSE[c] || '').filter(Boolean).join(' ')).join(' / ');
+const fromMorse = s => S(s).trim().split(/\s*\/\s*|\s{3,}/).map(w => w.split(/\s+/).map(c => MORSE_REV[c] || (c ? '?' : '')).join('')).join(' ');
+const playMorse = code => { try { if (typeof window === 'undefined') return; const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return; const ctx = new AC(); let t = ctx.currentTime + 0.05; const u = 0.08; code.split('').forEach(ch => { if (ch === '.' || ch === '-') { const d = ch === '.' ? u : u * 3; const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.value = 600; o.connect(g); g.connect(ctx.destination); g.gain.setValueAtTime(0.2, t); o.start(t); o.stop(t + d); t += d + u; } else if (ch === ' ') t += u * 2; else if (ch === '/') t += u * 4; }); } catch (e) { } };
+one(T, 'morse-code-encoder', 'Text to Morse Code', 'tower-broadcast', 'Convert text to Morse code.', s => toMorse(s) || 'Enter some text.', 'Convert');
+one(T, 'morse-code-decoder', 'Morse Code to Text', 'tower-broadcast', 'Decode Morse code (use / between words).', s => fromMorse(s) || 'Enter Morse code.', 'Decode', 'Morse Code', '.... . .-.. .-.. --- / .-- --- .-. .-.. -..');
+
+// --- extractors ---
+one(T, 'extract-emails', 'Email Extractor', 'at', 'Extract all email addresses from text.', s => [...new Set(s.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || [])].join('\n') || 'No email addresses found.', 'Extract');
+one(T, 'extract-urls', 'URL Extractor', 'link', 'Extract all web links from text.', s => [...new Set(s.match(/https?:\/\/[^\s<>"')]+/g) || [])].join('\n') || 'No URLs found.', 'Extract');
+one(T, 'extract-numbers', 'Number Extractor', 'hashtag', 'Extract all numbers from text.', s => (s.match(/-?\d+(?:\.\d+)?/g) || []).join('\n') || 'No numbers found.', 'Extract');
+one(T, 'extract-hashtags', 'Hashtag Extractor', 'hashtag', 'Extract all #hashtags and @mentions.', s => (s.match(/[#@][\p{L}\p{N}_]+/gu) || []).join('\n') || 'No hashtags or mentions found.', 'Extract');
+
+// --- markdown & lorem ---
+function md2html(s) {
+  s = s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); const out = []; let list = null, code = false;
+  const inl = t => t.replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/(^|[^*])\*(?!\s)(.+?)\*(?!\*)/g, '$1<em>$2</em>').replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, '<img src="$2" alt="$1">').replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2">$1</a>');
+  const close = () => { if (list) { out.push('</' + list + '>'); list = null; } };
+  lines(s).forEach(ln => {
+    let m;
+    if (/^```/.test(ln)) { close(); out.push(code ? '</code></pre>' : '<pre><code>'); code = !code; return; }
+    if (code) { out.push(ln); return; }
+    if ((m = ln.match(/^(#{1,6})\s+(.*)$/))) { close(); out.push(`<h${m[1].length}>${inl(m[2])}</h${m[1].length}>`); }
+    else if ((m = ln.match(/^\s*[-*+]\s+(.*)$/))) { if (list !== 'ul') { close(); out.push('<ul>'); list = 'ul'; } out.push('<li>' + inl(m[1]) + '</li>'); }
+    else if ((m = ln.match(/^\s*\d+[.)]\s+(.*)$/))) { if (list !== 'ol') { close(); out.push('<ol>'); list = 'ol'; } out.push('<li>' + inl(m[1]) + '</li>'); }
+    else if (/^\s*(---|\*\*\*)\s*$/.test(ln)) { close(); out.push('<hr>'); }
+    else if ((m = ln.match(/^&gt;\s?(.*)$/))) { close(); out.push('<blockquote>' + inl(m[1]) + '</blockquote>'); }
+    else if (!ln.trim()) close();
+    else { close(); out.push('<p>' + inl(ln) + '</p>'); }
   });
-})();
-
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { ALL_TOOLS, TOOL_CATEGORIES, TOOL_HELPERS, getToolById, getToolsByCategory, searchTools };
+  close(); if (code) out.push('</code></pre>'); return out.join('\n');
 }
+one(T, 'markdown-to-html', 'Markdown to HTML Converter', 'file-code', 'Convert Markdown into clean HTML code.', md2html, 'Convert', 'Markdown', '# Title\n\nSome **bold** text');
+one(T, 'text-to-markdown-checklist', 'Lines to Markdown Checklist', 'square-check', 'Turn lines into a Markdown task list.', s => lines(s).filter(l => l.trim()).map(l => '- [ ] ' + l.trim()).join('\n'), 'Convert');
+one(T, 'csv-to-markdown-table', 'CSV to Markdown Table', 'table', 'Convert CSV text into a Markdown table.', s => { const r = parseCSV(s, ','); if (!r.length) return 'Enter CSV data.'; const w = Math.max(...r.map(x => x.length)); const row = x => '| ' + Array.from({ length: w }, (_, i) => S(x[i]).replace(/\|/g, '\\|')).join(' | ') + ' |'; return [row(r[0]), '| ' + Array(w).fill('---').join(' | ') + ' |'].concat(r.slice(1).map(row)).join('\n'); }, 'Convert', 'CSV', 'Name,Age\nAsha,25');
+const LW = 'lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua enim ad minim veniam quis nostrud exercitation ullamco laboris nisi aliquip ex ea commodo consequat duis aute irure in reprehenderit voluptate velit esse cillum fugiat nulla pariatur excepteur sint occaecat cupidatat non proident sunt culpa qui officia deserunt mollit anim id est laborum'.split(' ');
+add('lorem-ipsum-generator', 'Lorem Ipsum Generator', T, ic('paragraph'), 'Generate placeholder paragraphs of Lorem Ipsum.', [nm('paras', 'Paragraphs', '3'), nm('sents', 'Sentences per paragraph', '5'), sl('start', 'Start with "Lorem ipsum"?', ['Yes', 'No'])], 'Generate', i => {
+  const P = Math.min(Math.max(parseInt(i.paras) || 1, 1), 50), N = Math.min(Math.max(parseInt(i.sents) || 1, 1), 30); const out = [];
+  for (let p = 0; p < P; p++) { const ss = []; for (let s = 0; s < N; s++) { const len = 8 + rnd(10); let w = Array.from({ length: len }, () => pick(LW)); if (p === 0 && s === 0 && i.start !== 'No') w = 'lorem ipsum dolor sit amet consectetur adipiscing elit'.split(' ').concat(w.slice(0, 3)); ss.push(cap(w.join(' ')) + '.'); } out.push(ss.join(' ')); }
+  return out.join('\n\n');
+});
+add('lorem-ipsum-words', 'Lorem Ipsum Word Generator', T, ic('align-justify'), 'Generate an exact number of placeholder words.', [nm('words', 'Number of words', '50')], 'Generate', i => { const n = Math.min(Math.max(parseInt(i.words) || 1, 1), 5000); return cap(Array.from({ length: n }, (_, k) => k < 2 ? ['lorem', 'ipsum'][k] : pick(LW)).join(' ')) + '.'; });
+add('anagram-checker', 'Anagram Checker', T, ic('shuffle'), 'Check if two words or phrases are anagrams.', [tx('a', 'First text', 'listen'), tx('b', 'Second text', 'silent')], 'Check', i => { const n = s => [...S(s).toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')].sort().join(''); const a = n(i.a), b = n(i.b); if (!a || !b) return 'Enter both texts.'; return a === b ? 'Yes, they are anagrams.' : 'No, they are not anagrams.'; });
+
+/* =====================================================================
+   2. DEVELOPER & CODING TOOLS
+   ===================================================================== */
+const D = CAT.DEV;
+function parseCSV(t, delim) {
+  const rows = []; let r = [], f = '', q = false; t = S(t);
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (q) { if (c === '"') { if (t[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += c; }
+    else if (c === '"') q = true;
+    else if (c === delim) { r.push(f); f = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && t[i + 1] === '\n') i++; r.push(f); f = ''; rows.push(r); r = []; }
+    else f += c;
+  }
+  if (f !== '' || r.length) { r.push(f); rows.push(r); }
+  return rows.filter(x => !(x.length === 1 && x[0] === ''));
+}
+const pj = (s, f) => { try { return f(JSON.parse(S(s))); } catch (e) { return 'Invalid JSON: ' + e.message; } };
+const sortKeys = o => Array.isArray(o) ? o.map(sortKeys) : (o && typeof o === 'object') ? Object.keys(o).sort().reduce((a, k) => (a[k] = sortKeys(o[k]), a), {}) : o;
+add('json-formatter', 'JSON Formatter & Beautifier', D, ic('code'), 'Pretty-print JSON with your preferred indentation.', [ta('text', 'JSON', '{"name":"QuickToolHub"}'), sl('indent', 'Indentation', ['2 spaces', '4 spaces', 'Tab'])], 'Format', i => pj(i.text, o => JSON.stringify(o, null, i.indent === 'Tab' ? '\t' : i.indent === '4 spaces' ? 4 : 2)));
+one(D, 'json-minifier', 'JSON Minifier', 'compress', 'Remove whitespace from JSON.', s => pj(s, o => JSON.stringify(o)), 'Minify', 'JSON');
+one(D, 'json-validator', 'JSON Validator', 'circle-check', 'Check whether JSON is valid and see its structure.', s => { try { const o = JSON.parse(s); const t = Array.isArray(o) ? `array with ${o.length} item(s)` : o === null ? 'null' : typeof o === 'object' ? `object with ${Object.keys(o).length} key(s)` : typeof o; return 'Valid JSON. Root: ' + t; } catch (e) { return 'Invalid JSON: ' + e.message; } }, 'Validate', 'JSON');
+one(D, 'json-sort-keys', 'JSON Key Sorter', 'arrow-down-a-z', 'Sort all JSON object keys alphabetically.', s => pj(s, o => JSON.stringify(sortKeys(o), null, 2)), 'Sort', 'JSON');
+one(D, 'json-string-escape', 'JSON String Escape', 'quote-right', 'Escape text for use inside a JSON string.', s => JSON.stringify(s).slice(1, -1), 'Escape');
+one(D, 'json-string-unescape', 'JSON String Unescape', 'quote-left', 'Unescape a JSON-escaped string.', s => { try { return JSON.parse('"' + s.replace(/^"|"$/g, '').replace(/(?<!\\)"/g, '\\"') + '"'); } catch (e) { return 'Invalid escape sequence: ' + e.message; } }, 'Unescape');
+one(D, 'json-to-csv', 'JSON to CSV Converter', 'file-csv', 'Convert a JSON array of objects to CSV.', s => pj(s, o => { if (!Array.isArray(o)) o = [o]; const keys = [...new Set(o.flatMap(x => Object.keys(x || {})))]; const q = v => { v = v === null || v === undefined ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }; return [keys.map(q).join(',')].concat(o.map(r => keys.map(k => q((r || {})[k])).join(','))).join('\n'); }), 'Convert', 'JSON Array');
+one(D, 'csv-to-json', 'CSV to JSON Converter', 'file-code', 'Convert CSV with a header row to JSON.', s => { const r = parseCSV(s, ','); if (r.length < 2) return 'Enter CSV with a header row and at least one data row.'; return JSON.stringify(r.slice(1).map(x => r[0].reduce((a, h, i) => (a[h] = x[i] === undefined ? '' : x[i], a), {})), null, 2); }, 'Convert', 'CSV', 'name,age\nAsha,25');
+one(D, 'json-to-yaml', 'JSON to YAML Converter', 'file-lines', 'Convert JSON into YAML.', s => pj(s, o => { const sc = v => typeof v === 'string' ? (/^[\w .\-\/]+$/.test(v) && !/^(true|false|null|\d.*)$/i.test(v) ? v : JSON.stringify(v)) : String(v); const y = (v, ind) => { const p = '  '.repeat(ind); if (Array.isArray(v)) return v.length ? v.map(x => (x && typeof x === 'object') ? p + '-\n' + y(x, ind + 1) : p + '- ' + sc(x)).join('\n') : p + '[]'; if (v && typeof v === 'object') { const k = Object.keys(v); return k.length ? k.map(key => (v[key] && typeof v[key] === 'object' && Object.keys(v[key]).length) ? p + key + ':\n' + y(v[key], ind + 1) : p + key + ': ' + (v[key] && typeof v[key] === 'object' ? (Array.isArray(v[key]) ? '[]' : '{}') : sc(v[key]))).join('\n') : p + '{}'; } return p + sc(v); }; return y(o, 0); }), 'Convert', 'JSON');
+
+// entities, URL, base64
+const ENT = s => S(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+one(D, 'html-entity-encoder', 'HTML Entity Encoder', 'code', 'Escape &, <, >, quotes and non-ASCII characters.', s => ENT(s).replace(/[^\x00-\x7F]/gu, c => '&#' + c.codePointAt(0) + ';'), 'Encode');
+one(D, 'html-entity-decoder', 'HTML Entity Decoder', 'code', 'Decode HTML entities back to characters.', s => { try { if (typeof DOMParser !== 'undefined') return new DOMParser().parseFromString(s, 'text/html').documentElement.textContent; } catch (e) { } const m = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00a0', copy: '©', reg: '®' }; return s.replace(/&#x([0-9a-f]+);/gi, (a, h) => String.fromCodePoint(parseInt(h, 16))).replace(/&#(\d+);/g, (a, d) => String.fromCodePoint(+d)).replace(/&(\w+);/g, (a, n) => m[n] || a); }, 'Decode');
+one(D, 'url-encoder', 'URL Encoder', 'link', 'Percent-encode text for safe use in URLs (component).', s => encodeURIComponent(s), 'Encode');
+one(D, 'url-decoder', 'URL Decoder', 'link-slash', 'Decode percent-encoded URL text.', s => { try { return decodeURIComponent(s.replace(/\+/g, ' ')); } catch (e) { return 'Invalid encoding: ' + e.message; } }, 'Decode');
+one(D, 'full-url-encoder', 'Full URL Encoder', 'link', 'Encode a full URL while keeping its structure intact.', s => encodeURI(s), 'Encode', 'URL', 'https://example.com/a b?q=ü');
+one(D, 'url-parser', 'URL Parser', 'diagram-project', 'Break a URL into protocol, host, path, query and hash.', s => { try { const u = new URL(s.trim()); const q = [...u.searchParams].map(p => `  ${p[0]} = ${p[1]}`).join('\n'); return `Protocol: ${u.protocol}\nHost: ${u.host}\nHostname: ${u.hostname}\nPort: ${u.port || '(default)'}\nPath: ${u.pathname}\nQuery: ${u.search || '(none)'}\nHash: ${u.hash || '(none)'}\nOrigin: ${u.origin}` + (q ? '\n\nQuery parameters:\n' + q : ''); } catch (e) { return 'Invalid URL. Include the protocol, e.g. https://'; } }, 'Parse', 'URL', 'https://example.com/path?x=1#top');
+one(D, 'query-string-parser', 'Query String Parser', 'filter', 'Parse a query string into key/value pairs (JSON).', s => { const q = s.trim().replace(/^.*\?/, '').replace(/#.*$/, ''); const o = {}; new URLSearchParams(q).forEach((v, k) => { o[k] = k in o ? [].concat(o[k], v) : v; }); return JSON.stringify(o, null, 2); }, 'Parse', 'Query String', 'a=1&b=two&b=three');
+add('query-string-builder', 'Query String Builder', D, ic('hammer'), 'Build a query string from JSON key/value pairs.', [ta('text', 'JSON object', '{"q":"search term","page":2}')], 'Build', i => pj(i.text, o => new URLSearchParams(Object.entries(o).map(e => [e[0], typeof e[1] === 'object' ? JSON.stringify(e[1]) : String(e[1])])).toString()));
+one(D, 'base64-encoder', 'Base64 Encoder', 'lock', 'Encode text (UTF-8) to Base64.', s => b64enc(s), 'Encode');
+one(D, 'base64-decoder', 'Base64 Decoder', 'unlock', 'Decode Base64 (or Base64URL) to text.', s => { try { return b64dec(s); } catch (e) { return 'Invalid Base64 input.'; } }, 'Decode', 'Base64');
+one(D, 'base64url-encoder', 'Base64URL Encoder', 'lock', 'Encode text to URL-safe Base64.', s => b64enc(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''), 'Encode');
+one(D, 'base64-to-hex', 'Base64 to Hex Converter', 'hashtag', 'Convert Base64 data into hexadecimal bytes.', s => { try { let t = s.trim().replace(/-/g, '+').replace(/_/g, '/'); while (t.length % 4) t += '='; return Array.from(atob(t)).map(c => c.charCodeAt(0).toString(16).padStart(2, '0')).join(''); } catch (e) { return 'Invalid Base64 input.'; } }, 'Convert', 'Base64');
+
+// minifiers & formatters
+const minCSS = s => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s+/g, ' ').replace(/\s*([{}:;,>~+])\s*/g, '$1').replace(/;}/g, '}').trim();
+one(D, 'css-minifier', 'CSS Minifier', 'compress', 'Minify CSS by removing comments and whitespace.', s => { const r = minCSS(s); return r + (s.length ? `\n\n/* ${s.length} -> ${r.length} bytes (${s.length ? Math.round((1 - r.length / s.length) * 100) : 0}% smaller) */` : ''); }, 'Minify', 'CSS');
+one(D, 'css-beautifier', 'CSS Beautifier', 'brush', 'Format minified CSS into readable code.', s => minCSS(s).replace(/\{/g, ' {\n  ').replace(/;(?!\s*})/g, ';\n  ').replace(/;}/g, ';\n}').replace(/([^;{}])}/g, '$1;\n}').replace(/}/g, '}\n').replace(/\n\s*\n/g, '\n').replace(/\n  }/g, '\n}').replace(/:(?=\S)/g, (m, o, str) => m).trim(), 'Beautify', 'CSS');
+function minJS(src) {
+  let o = '', i = 0; const n = src.length, isW = c => /[\w$]/.test(c || '');
+  const lastSig = () => { for (let k = o.length - 1; k >= 0; k--) if (!/\s/.test(o[k])) return o.slice(0, k + 1); return ''; };
+  while (i < n) {
+    const c = src[i], d = src[i + 1];
+    if (c === '/' && d === '/') { while (i < n && src[i] !== '\n') i++; continue; }
+    if (c === '/' && d === '*') { i += 2; while (i < n && !(src[i] === '*' && src[i + 1] === '/')) i++; i += 2; continue; }
+    if (c === '"' || c === "'" || c === '`') { let j = i + 1; while (j < n && src[j] !== c) { if (src[j] === '\\') j++; j++; } o += src.slice(i, j + 1); i = j + 1; continue; }
+    if (c === '/') { const ls = lastSig(); const p = ls[ls.length - 1]; if (!ls || /[(,=:\[!&|?{};+\-*%<>~^]/.test(p) || /(?:^|[^\w$])(return|typeof|case|in|of)$/.test(ls)) { let j = i + 1, cls = false; while (j < n && (src[j] !== '/' || cls) && src[j] !== '\n') { if (src[j] === '\\') j++; else if (src[j] === '[') cls = true; else if (src[j] === ']') cls = false; j++; } j++; while (j < n && /[a-z]/i.test(src[j])) j++; o += src.slice(i, j); i = j; continue; } }
+    if (/\s/.test(c)) {
+      let j = i, nl = false; while (j < n && /\s/.test(src[j])) { if (src[j] === '\n') nl = true; j++; }
+      const nx = src[j], pv = o[o.length - 1];
+      if (pv && nx) {
+        if ((isW(pv) && isW(nx)) || ((pv === '+' || pv === '-') && nx === pv)) o += nl ? '\n' : ' ';
+        else if (nl && /[\w$)\]'"`]/.test(pv) && /[\w$'"`!~(\[+\-]/.test(nx)) o += '\n';
+      }
+      i = j; continue;
+    }
+    o += c; i++;
+  }
+  return o.trim();
+}
+one(D, 'js-minifier', 'JavaScript Minifier', 'compress', 'Minify JavaScript by stripping comments and whitespace.', s => { const r = minJS(s); return r + (s.length ? `\n\n/* ${s.length} -> ${r.length} bytes */` : ''); }, 'Minify', 'JavaScript');
+one(D, 'html-minifier', 'HTML Minifier', 'compress', 'Remove comments and extra whitespace from HTML.', s => s.replace(/<!--(?!\[if)[\s\S]*?-->/g, '').replace(/>\s+</g, '><').replace(/\s{2,}/g, ' ').trim(), 'Minify', 'HTML');
+const SQLK = ['SELECT', 'FROM', 'WHERE', 'GROUP BY', 'ORDER BY', 'HAVING', 'LIMIT', 'OFFSET', 'INSERT INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE FROM', 'LEFT OUTER JOIN', 'RIGHT OUTER JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'INNER JOIN', 'FULL JOIN', 'CROSS JOIN', 'JOIN', 'UNION ALL', 'UNION', 'ON', 'AND', 'OR'];
+const SQLU = ['AS', 'DISTINCT', 'NOT', 'NULL', 'IN', 'LIKE', 'BETWEEN', 'IS', 'ASC', 'DESC', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'EXISTS', 'CREATE TABLE', 'ALTER TABLE', 'DROP TABLE', 'COUNT', 'SUM', 'AVG', 'MIN', 'MAX'];
+function fmtSQL(sql) {
+  const str = []; sql = S(sql).replace(/'(?:[^']|'')*'|"[^"]*"|`[^`]*`/g, m => { str.push(m); return '\u0000' + (str.length - 1) + '\u0000'; }).replace(/\s+/g, ' ').trim();
+  SQLU.forEach(k => { sql = sql.replace(new RegExp('\\b' + k.replace(/ /g, '\\s+') + '\\b', 'gi'), k); });
+  const major = SQLK.filter(k => !['AND', 'OR', 'ON'].includes(k));
+  sql = sql.replace(new RegExp('\\b(' + major.map(k => k.replace(/ /g, '\\s+')).join('|') + ')\\b', 'gi'), m => '\n' + m.toUpperCase().replace(/\s+/g, ' '));
+  sql = sql.replace(/\b(AND|OR)\b/gi, (m, a) => '\n  ' + a.toUpperCase()).replace(/\bON\b/gi, '\n  ON').replace(/,\s*/g, ',\n  ').replace(/^\n/, '').replace(/ +\n/g, '\n').trim();
+  return sql.replace(/\u0000(\d+)\u0000/g, (m, k) => str[+k]);
+}
+one(D, 'sql-formatter', 'SQL Formatter', 'database', 'Beautify SQL queries with keyword casing and indentation.', fmtSQL, 'Format', 'SQL Query', 'select id,name from users where age>18 and active=1 order by name');
+one(D, 'sql-minifier', 'SQL Minifier', 'database', 'Collapse SQL into a single compact line.', s => S(s).replace(/--[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s+/g, ' ').trim(), 'Minify', 'SQL Query');
+const xmlOk = s => { try { if (typeof DOMParser === 'undefined') return true; const d = new DOMParser().parseFromString(s, 'application/xml'); return !d.getElementsByTagName('parsererror').length; } catch (e) { return true; } };
+add('xml-formatter', 'XML Formatter', D, ic('code'), 'Pretty-print XML with indentation.', [ta('text', 'XML', '<root><item>1</item></root>'), sl('indent', 'Indentation', ['2 spaces', '4 spaces', 'Tab'])], 'Format', i => { const x = S(i.text).trim(); if (!x) return 'Enter XML.'; if (!xmlOk(x)) return 'Invalid XML: could not parse the document.'; const ind = i.indent === 'Tab' ? '\t' : i.indent === '4 spaces' ? '    ' : '  '; let lvl = 0; return x.replace(/>\s+</g, '><').replace(/></g, '>\n<').split('\n').map(t => { if (/^<\/.+>/.test(t)) lvl = Math.max(lvl - 1, 0); const line = ind.repeat(lvl) + t; if (/^<[^!?\/][^>]*(?<!\/)>$/.test(t) &&!/^<[^>]+>.*<\/[^>]+>$/.test(t)) lvl++; return line; }).join('\n'); });
+one(D, 'xml-minifier', 'XML Minifier', 'compress', 'Remove whitespace and comments from XML.', s => S(s).replace(/<!--[\s\S]*?-->/g, '').replace(/>\s+</g, '><').trim(), 'Minify', 'XML');
+one(D, 'xml-validator', 'XML Validator', 'circle-check', 'Check if XML is well-formed.', s => s.trim() ? (xmlOk(s) ? 'XML is well-formed.' : 'Invalid XML: not well-formed.') : 'Enter XML.', 'Validate', 'XML');
+
+// JWT, regex, ids, time
+one(D, 'jwt-decoder', 'JWT Decoder', 'key', 'Decode JWT header and payload (signature is not verified).', s => { try { const p = s.trim().split('.'); if (p.length < 2) return 'Invalid JWT: expected at least two dot-separated parts.'; const h = JSON.parse(b64dec(p[0])), b = JSON.parse(b64dec(p[1])); let r = 'HEADER:\n' + JSON.stringify(h, null, 2) + '\n\nPAYLOAD:\n' + JSON.stringify(b, null, 2); ['iat', 'nbf', 'exp'].forEach(k => { if (typeof b[k] === 'number') r += `\n\n${k}: ${new Date(b[k] * 1000).toISOString()}`; }); if (typeof b.exp === 'number') r += b.exp * 1000 < Date.now() ? ' (EXPIRED)' : ' (valid)'; return r + '\n\nNote: signature is not verified.'; } catch (e) { return 'Invalid JWT: ' + e.message; } }, 'Decode', 'JWT Token', 'eyJhbGciOi...');
+add('regex-tester', 'Regex Tester', D, ic('asterisk'), 'Test a regular expression and list all matches and groups.', [tx('pattern', 'Pattern', '(\\d+)-(\\w+)'), tx('flags', 'Flags', 'g, i, m, s, u'), ta('text', 'Test string', 'Text to search...')], 'Test', i => { try { let f = S(i.flags).replace(/[^gimsuy]/g, ''); if (!f.includes('g')) f += 'g'; const re = new RegExp(S(i.pattern), f); const ms = [...S(i.text).matchAll(re)].slice(0, 200); if (!ms.length) return 'No matches found.'; return `${ms.length} match(es):\n\n` + ms.map((m, k) => `#${k + 1} at index ${m.index}: "${m[0]}"` + (m.length > 1 ? '\n' + m.slice(1).map((g, j) => `   group ${j + 1}: ${g === undefined ? '(undefined)' : '"' + g + '"'}`).join('\n') : '')).join('\n'); } catch (e) { return 'Invalid regex: ' + e.message; } });
+one(D, 'regex-escape', 'Regex Escape Tool', 'asterisk', 'Escape special regex characters in a string.', s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'Escape');
+const uuid4 = () => { if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID(); const b = randBytes(16); b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128; const h = toHex(b); return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`; };
+add('uuid-v4-generator', 'UUID v4 Generator', D, ic('fingerprint'), 'Generate random version 4 UUIDs.', [nm('count', 'How many?', '5'), sl('fmt', 'Format', ['Lowercase', 'Uppercase', 'No hyphens'])], 'Generate', i => Array.from({ length: Math.min(Math.max(parseInt(i.count) || 1, 1), 500) }, () => { let u = uuid4(); if (i.fmt === 'Uppercase') u = u.toUpperCase(); if (i.fmt === 'No hyphens') u = u.replace(/-/g, ''); return u; }).join('\n'));
+add('timestamp-to-date', 'Timestamp to Date Converter', D, ic('clock'), 'Convert a Unix timestamp (seconds or milliseconds) to a date.', [tx('ts', 'Unix timestamp', '1700000000')], 'Convert', i => { const v = nv(i.ts); if (bad(v)) return ERR; const ms = Math.abs(v) < 1e11 ? v * 1000 : v; const d = new Date(ms); if (isNaN(d)) return 'Timestamp out of range.'; return `Detected unit: ${Math.abs(v) < 1e11 ? 'seconds' : 'milliseconds'}\nUTC: ${d.toUTCString()}\nISO 8601: ${d.toISOString()}\nLocal: ${d.toString()}\nIndia (IST): ${d.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })}`; });
+add('date-to-timestamp', 'Date to Timestamp Converter', D, ic('calendar-check'), 'Convert a date and time to a Unix timestamp.', [tx('dt', 'Date & time (ISO or readable)', '2025-01-31 14:30:00'), sl('tz', 'Interpret as', ['UTC', 'Local time'])], 'Convert', i => { let s = S(i.dt).trim(); if (!s) return 'Enter a date.'; if (i.tz === 'UTC' && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) s = s.replace(' ', 'T') + (/T/.test(s.replace(' ', 'T')) ? 'Z' : 'T00:00:00Z'); const d = new Date(s); if (isNaN(d)) return 'Could not parse that date.'; return `Seconds: ${Math.floor(d.getTime() / 1000)}\nMilliseconds: ${d.getTime()}\nISO: ${d.toISOString()}`; });
+add('unix-epoch-converter', 'Unix Epoch Converter (Now)', D, ic('stopwatch'), 'Get the current Unix time in seconds and milliseconds.', [sl('x', 'Show', ['Current time'])], 'Get Time', () => { const n = Date.now(); return `Seconds: ${Math.floor(n / 1000)}\nMilliseconds: ${n}\nISO: ${new Date(n).toISOString()}`; });
+add('epoch-difference', 'Epoch Time Difference', D, ic('hourglass-half'), 'Find the difference between two Unix timestamps.', [tx('a', 'Timestamp 1 (seconds)', '1700000000'), tx('b', 'Timestamp 2 (seconds)', '1700086400')], 'Calculate', i => { const a = nv(i.a), b = nv(i.b); if (bad(a, b)) return ERR; const s = Math.abs(b - a); return `Difference: ${s} seconds\n= ${fmt(s / 60)} minutes\n= ${fmt(s / 3600)} hours\n= ${fmt(s / 86400)} days`; });
+
+// colors
+const hsl2rgb = (h, s, l) => { h = ((h % 360) + 360) % 360; s /= 100; l /= 100; const k = n => (n + h / 30) % 12, a = s * Math.min(l, 1 - l), f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1))); return [f(0), f(8), f(4)].map(x => Math.round(x * 255)); };
+const rgb2hsl = (r, g, b) => { r /= 255; g /= 255; b /= 255; const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2; let h = 0, s = 0; if (mx !== mn) { const d = mx - mn; s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn); h = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; h *= 60; } return [Math.round(h), Math.round(s * 100), Math.round(l * 100)]; };
+const rgb2hex = (r, g, b) => '#' + [r, g, b].map(x => Math.max(0, Math.min(255, Math.round(x))).toString(16).padStart(2, '0')).join('').toUpperCase();
+const parseColor = s => { s = S(s).trim().toLowerCase(); let m; if ((m = s.match(/^#?([0-9a-f]{3})$/))) return m[1].split('').map(c => parseInt(c + c, 16)); if ((m = s.match(/^#?([0-9a-f]{6})$/))) return [0, 2, 4].map(i => parseInt(m[1].substr(i, 2), 16)); if ((m = s.match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/))) return [+m[1], +m[2], +m[3]].map(x => Math.min(255, Math.max(0, Math.round(x)))); if ((m = s.match(/^hsla?\(\s*([\d.]+)(?:deg)?[,\s]+([\d.]+)%?[,\s]+([\d.]+)%?/))) return hsl2rgb(+m[1], +m[2], +m[3]); return null; };
+const CE = 'Unrecognized color. Try #1e90ff, rgb(30,144,255) or hsl(210,100%,56%).';
+one(D, 'color-converter', 'Color Converter (HEX / RGB / HSL)', 'palette', 'Convert any color between HEX, RGB and HSL.', s => { const c = parseColor(s); if (!c) return CE; const h = rgb2hsl(...c); return `HEX: ${rgb2hex(...c)}\nRGB: rgb(${c.join(', ')})\nHSL: hsl(${h[0]}, ${h[1]}%, ${h[2]}%)`; }, 'Convert', 'Color', '#1e90ff');
+one(D, 'hex-to-rgb', 'HEX to RGB Converter', 'palette', 'Convert a HEX color code to RGB.', s => { const c = parseColor(s); return c ? `rgb(${c.join(', ')})` : CE; }, 'Convert', 'HEX', '#1e90ff');
+one(D, 'rgb-to-hex', 'RGB to HEX Converter', 'palette', 'Convert RGB values to a HEX color code.', s => { const c = parseColor(/^rgb/i.test(s.trim()) ? s : 'rgb(' + s.replace(/[^\d.]+/g, ',').replace(/^,|,$/g, '') + ')'); return c ? rgb2hex(...c) : CE; }, 'Convert', 'RGB', '30, 144, 255');
+one(D, 'hex-to-hsl', 'HEX to HSL Converter', 'palette', 'Convert a HEX color code to HSL.', s => { const c = parseColor(s); if (!c) return CE; const h = rgb2hsl(...c); return `hsl(${h[0]}, ${h[1]}%, ${h[2]}%)`; }, 'Convert', 'HEX', '#1e90ff');
+one(D, 'hsl-to-hex', 'HSL to HEX Converter', 'palette', 'Convert HSL values to a HEX color code.', s => { const c = parseColor(/^hsl/i.test(s.trim()) ? s : 'hsl(' + s.replace(/[^\d.]+/g, ',').replace(/^,|,$/g, '') + ')'); return c ? rgb2hex(...c) : CE; }, 'Convert', 'HSL', '210, 100, 56');
+one(D, 'rgb-to-hsl', 'RGB to HSL Converter', 'palette', 'Convert RGB values to HSL.', s => { const c = parseColor(/^rgb/i.test(s.trim()) ? s : 'rgb(' + s.replace(/[^\d.]+/g, ',').replace(/^,|,$/g, '') + ')'); if (!c) return CE; const h = rgb2hsl(...c); return `hsl(${h[0]}, ${h[1]}%, ${h[2]}%)`; }, 'Convert', 'RGB', '30, 144, 255');
+one(D, 'hsl-to-rgb', 'HSL to RGB Converter', 'palette', 'Convert HSL values to RGB.', s => { const c = parseColor(/^hsl/i.test(s.trim()) ? s : 'hsl(' + s.replace(/[^\d.]+/g, ',').replace(/^,|,$/g, '') + ')'); return c ? `rgb(${c.join(', ')})` : CE; }, 'Convert', 'HSL', '210, 100, 56');
+add('color-contrast-checker', 'Color Contrast Checker (WCAG)', D, ic('circle-half-stroke'), 'Check text/background contrast against WCAG AA and AAA.', [tx('fg', 'Text color', '#222222'), tx('bg', 'Background color', '#ffffff')], 'Check', i => { const a = parseColor(i.fg), b = parseColor(i.bg); if (!a || !b) return CE; const lum = c => { const [r, g, bl] = c.map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); return 0.2126 * r + 0.7152 * g + 0.0722 * bl; }; const l1 = lum(a), l2 = lum(b), r = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05); const y = x => x ? 'Pass' : 'Fail'; return `Contrast ratio: ${r.toFixed(2)}:1\nAA normal text (4.5): ${y(r >= 4.5)}\nAA large text (3): ${y(r >= 3)}\nAAA normal text (7): ${y(r >= 7)}\nAAA large text (4.5): ${y(r >= 4.5)}`; });
+add('random-color-generator', 'Random Color Generator', D, ic('droplet'), 'Generate random colors in HEX, RGB and HSL.', [nm('count', 'How many?', '5')], 'Generate', i => Array.from({ length: Math.min(Math.max(parseInt(i.count) || 1, 1), 100) }, () => { const c = [rnd(256), rnd(256), rnd(256)], h = rgb2hsl(...c); return `${rgb2hex(...c)}  rgb(${c.join(', ')})  hsl(${h[0]}, ${h[1]}%, ${h[2]}%)`; }).join('\n'));
+add('px-to-rem', 'PX to REM Converter', D, ic('ruler-horizontal'), 'Convert pixels to rem units.', [nm('px', 'Pixels', '24'), nm('base', 'Base font size (px)', '16')], 'Convert', i => { const p = nv(i.px), b = nv(i.base || 16); if (bad(p, b) || !b) return ERR; return `${fmt(p)}px = ${fmt(p / b)}rem`; });
+add('rem-to-px', 'REM to PX Converter', D, ic('ruler-horizontal'), 'Convert rem units to pixels.', [nm('rem', 'REM', '1.5'), nm('base', 'Base font size (px)', '16')], 'Convert', i => { const p = nv(i.rem), b = nv(i.base || 16); if (bad(p, b)) return ERR; return `${fmt(p)}rem = ${fmt(p * b)}px`; });
+
+// lookups
+const HTTP = { 100: 'Continue - Server received the headers; client should continue.', 101: 'Switching Protocols - Server is switching protocols as requested.', 102: 'Processing - Request is being processed (WebDAV).', 103: 'Early Hints - Preload hints sent before the final response.', 200: 'OK - Request succeeded.', 201: 'Created - A new resource was created.', 202: 'Accepted - Request accepted for processing, not yet completed.', 203: 'Non-Authoritative Information - Response modified by a proxy.', 204: 'No Content - Success with no response body.', 205: 'Reset Content - Client should reset the document view.', 206: 'Partial Content - Partial resource returned (range request).', 301: 'Moved Permanently - Resource has a new permanent URL.', 302: 'Found - Temporary redirect.', 303: 'See Other - Fetch the resource at another URL with GET.', 304: 'Not Modified - Cached version is still valid.', 307: 'Temporary Redirect - Repeat the request at another URL, same method.', 308: 'Permanent Redirect - Permanent redirect, same method.', 400: 'Bad Request - Malformed request syntax.', 401: 'Unauthorized - Authentication required or failed.', 402: 'Payment Required - Reserved for future use.', 403: 'Forbidden - Server refuses to authorize the request.', 404: 'Not Found - Resource does not exist.', 405: 'Method Not Allowed - HTTP method not supported for this resource.', 406: 'Not Acceptable - No content matching Accept headers.', 407: 'Proxy Authentication Required - Authenticate with the proxy first.', 408: 'Request Timeout - Server timed out waiting for the request.', 409: 'Conflict - Request conflicts with current resource state.', 410: 'Gone - Resource was permanently removed.', 411: 'Length Required - Content-Length header is required.', 412: 'Precondition Failed - A precondition in the headers failed.', 413: 'Payload Too Large - Request body exceeds server limits.', 414: 'URI Too Long - Request URL is too long.', 415: 'Unsupported Media Type - Content type is not supported.', 416: 'Range Not Satisfiable - Requested range is invalid.', 417: 'Expectation Failed - Expect header could not be met.', 418: "I'm a teapot - April Fools' joke status (RFC 2324).", 422: 'Unprocessable Content - Well-formed but semantically invalid.', 423: 'Locked - Resource is locked.', 425: 'Too Early - Server unwilling to risk replay.', 426: 'Upgrade Required - Client must switch protocol.', 428: 'Precondition Required - Conditional request required.', 429: 'Too Many Requests - Rate limit exceeded.', 431: 'Request Header Fields Too Large - Headers too large.', 451: 'Unavailable For Legal Reasons - Blocked for legal reasons.', 500: 'Internal Server Error - Generic server failure.', 501: 'Not Implemented - Server does not support the functionality.', 502: 'Bad Gateway - Invalid response from upstream server.', 503: 'Service Unavailable - Server overloaded or down for maintenance.', 504: 'Gateway Timeout - Upstream server did not respond in time.', 505: 'HTTP Version Not Supported - HTTP version unsupported.', 507: 'Insufficient Storage - Server cannot store the representation.', 508: 'Loop Detected - Infinite loop detected.', 511: 'Network Authentication Required - Network login required.' };
+one(D, 'http-status-code-lookup', 'HTTP Status Code Lookup', 'server', 'Look up an HTTP status code or search by keyword.', s => { s = s.trim(); if (!s) return Object.keys(HTTP).map(k => k + ' ' + HTTP[k]).join('\n'); if (/^\d{3}$/.test(s)) return HTTP[s] ? s + ' ' + HTTP[s] : 'Unknown status code ' + s + '.'; if (/^[1-5]xx$/i.test(s)) return Object.keys(HTTP).filter(k => k[0] === s[0]).map(k => k + ' ' + HTTP[k]).join('\n'); const r = Object.keys(HTTP).filter(k => HTTP[k].toLowerCase().includes(s.toLowerCase())); return r.length ? r.map(k => k + ' ' + HTTP[k]).join('\n') : 'No matching status code.'; }, 'Look Up', 'Code or keyword', '404, 5xx, or "redirect" (blank = all)');
+const MIME = { html: 'text/html', htm: 'text/html', css: 'text/css', js: 'text/javascript', mjs: 'text/javascript', json: 'application/json', xml: 'application/xml', txt: 'text/plain', csv: 'text/csv', md: 'text/markdown', pdf: 'application/pdf', zip: 'application/zip', gz: 'application/gzip', tar: 'application/x-tar', rar: 'application/vnd.rar', '7z': 'application/x-7z-compressed', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', ico: 'image/x-icon', avif: 'image/avif', bmp: 'image/bmp', mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', avi: 'video/x-msvideo', woff: 'font/woff', woff2: 'font/woff2', ttf: 'font/ttf', otf: 'font/otf', doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', wasm: 'application/wasm', yaml: 'application/yaml', yml: 'application/yaml', apk: 'application/vnd.android.package-archive' };
+one(D, 'mime-type-lookup', 'MIME Type Lookup', 'file', 'Find the MIME type for a file extension.', s => { const e = s.trim().toLowerCase().replace(/^.*\./, ''); return MIME[e] ? `.${e} -> ${MIME[e]}` : 'Unknown extension: .' + e; }, 'Look Up', 'File extension', 'png or photo.png');
+one(D, 'basic-auth-header', 'Basic Auth Header Generator', 'user-lock', 'Build an HTTP Basic Authorization header.', s => { const [u, ...p] = s.split(':'); return 'Authorization: Basic ' + b64enc(u + ':' + p.join(':')); }, 'Generate', 'username:password', 'user:pass');
+one(D, 'cookie-parser', 'Cookie String Parser', 'cookie-bite', 'Parse a Cookie header into JSON.', s => { const o = {}; s.split(/;\s*/).filter(Boolean).forEach(c => { const k = c.indexOf('='); const n = k < 0 ? c : c.slice(0, k); let v = k < 0 ? '' : c.slice(k + 1); try { v = decodeURIComponent(v); } catch (e) { } o[n.trim()] = v; }); return JSON.stringify(o, null, 2); }, 'Parse', 'Cookie header', 'a=1; b=hello%20world');
+one(D, 'ipv4-validator', 'IPv4 Address Validator', 'network-wired', 'Check whether text is a valid IPv4 address.', s => { const p = s.trim().split('.'); const ok = p.length === 4 && p.every(x => /^\d{1,3}$/.test(x) && +x <= 255 && String(+x) === x); return ok ? 'Valid IPv4 address.' : 'Invalid IPv4 address.'; }, 'Validate', 'IP address', '192.168.1.1');
+one(D, 'ipv4-to-integer', 'IPv4 to Integer Converter', 'network-wired', 'Convert an IPv4 address to its decimal integer.', s => { const p = s.trim().split('.').map(Number); if (p.length !== 4 || p.some(x => !(x >= 0 && x <= 255))) return 'Invalid IPv4 address.'; return String(((p[0] * 256 + p[1]) * 256 + p[2]) * 256 + p[3]); }, 'Convert', 'IP address', '192.168.1.1');
+one(D, 'integer-to-ipv4', 'Integer to IPv4 Converter', 'network-wired', 'Convert a decimal integer to an IPv4 address.', s => { const n = Number(s.trim()); if (!Number.isInteger(n) || n < 0 || n > 4294967295) return 'Enter an integer from 0 to 4294967295.'; return [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.'); }, 'Convert', 'Integer', '3232235777');
+one(D, 'cidr-calculator', 'CIDR / Subnet Calculator', 'sitemap', 'Calculate network range, mask and host count from CIDR.', s => { const m = s.trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/); if (!m) return 'Use format 192.168.1.0/24'; const o = m.slice(1, 5).map(Number), p = +m[5]; if (o.some(x => x > 255) || p > 32) return 'Invalid address or prefix.'; const ip = ((o[0] << 24) | (o[1] << 16) | (o[2] << 8) | o[3]) >>> 0, mask = p === 0 ? 0 : (0xFFFFFFFF << (32 - p)) >>> 0, net = (ip & mask) >>> 0, bc = (net | ~mask) >>> 0; const q = n => [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.'); const hosts = p >= 31 ? Math.pow(2, 32 - p) : Math.pow(2, 32 - p) - 2; return `Network: ${q(net)}\nBroadcast: ${q(bc)}\nSubnet mask: ${q(mask)}\nWildcard: ${q((~mask) >>> 0)}\nFirst host: ${q(p >= 31 ? net : net + 1)}\nLast host: ${q(p >= 31 ? bc : bc - 1)}\nUsable hosts: ${hosts}`; }, 'Calculate', 'CIDR', '192.168.1.0/24');
+one(D, 'email-validator', 'Email Address Validator', 'envelope-circle-check', 'Validate email address syntax (one per line).', s => lines(s).filter(l => l.trim()).map(l => l.trim() + ' -> ' + (/^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/.test(l.trim()) ? 'valid' : 'invalid')).join('\n') || 'Enter an email address.', 'Validate', 'Email(s)', 'name@example.com');
+one(D, 'url-validator', 'URL Validator', 'globe', 'Check whether text is a valid http(s) URL (one per line).', s => lines(s).filter(l => l.trim()).map(l => { let ok = false; try { const u = new URL(l.trim()); ok = /^https?:$/.test(u.protocol) && u.hostname.includes('.'); } catch (e) { } return l.trim() + ' -> ' + (ok ? 'valid' : 'invalid'); }).join('\n') || 'Enter a URL.', 'Validate', 'URL(s)', 'https://example.com');
+one(D, 'html-to-text', 'HTML to Plain Text', 'file-lines', 'Convert HTML into readable plain text.', s => s.replace(/<(script|style)[\s\S]*?<\/\1>/gi, '').replace(/<br\s*\/?>|<\/(p|div|h[1-6]|li|tr)>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/\n{3,}/g, '\n\n').trim(), 'Convert', 'HTML');
+
+/* =====================================================================
+   3. MATH & CALCULATORS
+   ===================================================================== */
+const M = CAT.MATH;
+const calc2 = (id, title, icon, desc, labels, fn, ph) => add(id, title, M, ic(icon), desc, labels.map((l, k) => nm('v' + k, l, ph && ph[k] || '')), 'Calculate', i => { const v = labels.map((l, k) => nv(i['v' + k])); return bad(...v) ? ERR : fn(...v); });
+calc2('percentage-of', 'Percentage Calculator (X% of Y)', 'percent', 'Find X percent of a number.', ['Percentage (%)', 'Of number'], (p, n) => `${fmt(p)}% of ${fmt(n)} = ${fmt(p * n / 100)}`, ['20', '500']);
+calc2('what-percent', 'What Percent Is X of Y?', 'percent', 'Find what percentage one number is of another.', ['Part value (X)', 'Total value (Y)'], (x, y) => y === 0 ? 'Total cannot be zero.' : `${fmt(x)} is ${fmt(x / y * 100)}% of ${fmt(y)}`, ['25', '200']);
+calc2('percentage-change', 'Percentage Change Calculator', 'arrow-trend-up', 'Calculate percentage increase or decrease between two values.', ['Old value', 'New value'], (a, b) => a === 0 ? 'Old value cannot be zero.' : `${b >= a ? 'Increase' : 'Decrease'} of ${fmt(Math.abs((b - a) / a * 100))}%\nChange: ${fmt(b - a)}`, ['100', '125']);
+calc2('percentage-increase', 'Percentage Increase Calculator', 'arrow-trend-up', 'Increase a number by a percentage.', ['Original value', 'Increase (%)'], (v, p) => `${fmt(v)} + ${fmt(p)}% = ${fmt(v * (1 + p / 100))}\nIncrease amount: ${fmt(v * p / 100)}`, ['200', '15']);
+calc2('percentage-decrease', 'Percentage Decrease Calculator', 'arrow-trend-down', 'Decrease a number by a percentage.', ['Original value', 'Decrease (%)'], (v, p) => `${fmt(v)} - ${fmt(p)}% = ${fmt(v * (1 - p / 100))}\nDecrease amount: ${fmt(v * p / 100)}`, ['200', '15']);
+calc2('percentage-difference', 'Percentage Difference Calculator', 'scale-balanced', 'Find the percentage difference between two numbers.', ['Value 1', 'Value 2'], (a, b) => (a + b) === 0 ? 'Values cannot sum to zero.' : `Percentage difference: ${fmt(Math.abs(a - b) / ((a + b) / 2) * 100)}%`, ['80', '100']);
+calc2('reverse-percentage', 'Reverse Percentage Calculator', 'rotate-left', 'Find the original value before a percentage was added.', ['Final value', 'Percentage added (%)'], (f, p) => `Original value: ${fmt(f / (1 + p / 100))}`, ['115', '15']);
+add('compound-interest-calculator', 'Compound Interest Calculator', M, ic('chart-line'), 'Calculate future value with compound interest.', [nm('p', 'Principal amount', '100000'), nm('r', 'Annual interest rate (%)', '8'), nm('t', 'Time (years)', '5'), sl('n', 'Compounding', ['Yearly', 'Half-yearly', 'Quarterly', 'Monthly', 'Daily'])], 'Calculate', i => { const p = nv(i.p), r = nv(i.r), t = nv(i.t), n = { 'Yearly': 1, 'Half-yearly': 2, 'Quarterly': 4, 'Monthly': 12, 'Daily': 365 }[i.n] || 1; if (bad(p, r, t)) return ERR; const a = p * Math.pow(1 + r / 100 / n, n * t); return `Final amount: ${money(a)}\nInterest earned: ${money(a - p)}\nEffective annual rate: ${fmt((Math.pow(1 + r / 100 / n, n) - 1) * 100, 6)}%`; });
+calc2('simple-interest-calculator', 'Simple Interest Calculator', 'coins', 'Calculate simple interest and total amount.', ['Principal', 'Rate (% per year)', 'Time (years)'], (p, r, t) => `Simple interest: ${money(p * r * t / 100)}\nTotal amount: ${money(p + p * r * t / 100)}`, ['50000', '7.5', '3']);
+calc2('discount-calculator', 'Discount Calculator', 'tag', 'Calculate the sale price and savings after a discount.', ['Original price', 'Discount (%)'], (p, d) => `Discount amount: ${money(p * d / 100)}\nFinal price: ${money(p * (1 - d / 100))}`, ['1999', '25']);
+calc2('double-discount-calculator', 'Successive Discount Calculator', 'tags', 'Apply two successive discounts to a price.', ['Original price', 'First discount (%)', 'Second discount (%)'], (p, a, b) => { const f = p * (1 - a / 100) * (1 - b / 100); return `Final price: ${money(f)}\nTotal savings: ${money(p - f)}\nEffective discount: ${fmt((1 - f / p) * 100)}%`; }, ['1000', '20', '10']);
+add('gst-calculator', 'GST Calculator (Add / Remove)', M, ic('receipt'), 'Add GST to a price or extract GST from a GST-inclusive price.', [nm('amt', 'Amount', '1000'), nm('rate', 'GST rate (%)', '18'), sl('mode', 'Mode', ['Add GST (exclusive price)', 'Remove GST (inclusive price)'])], 'Calculate', i => { const a = nv(i.amt), r = nv(i.rate); if (bad(a, r)) return ERR; const add_ = i.mode && i.mode.startsWith('Add'); const net = add_ ? a : a / (1 + r / 100), gst = net * r / 100; return `Net amount: ${money(net)}\nGST (${fmt(r)}%): ${money(gst)}\nCGST (${fmt(r / 2)}%): ${money(gst / 2)}\nSGST/UTGST (${fmt(r / 2)}%): ${money(gst / 2)}\nGross amount: ${money(net + gst)}`; });
+add('sales-tax-calculator', 'Sales Tax Calculator', M, ic('cash-register'), 'Calculate sales tax and total price.', [nm('amt', 'Price before tax', '100'), nm('rate', 'Tax rate (%)', '8.25')], 'Calculate', i => { const a = nv(i.amt), r = nv(i.rate); if (bad(a, r)) return ERR; return `Sales tax: ${money(a * r / 100)}\nTotal price: ${money(a * (1 + r / 100))}`; });
+calc2('vat-calculator', 'VAT Calculator', 'receipt', 'Add VAT to a net price.', ['Net price', 'VAT rate (%)'], (a, r) => `VAT: ${money(a * r / 100)}\nGross price: ${money(a * (1 + r / 100))}`, ['100', '20']);
+calc2('tip-calculator', 'Tip Calculator', 'hand-holding-dollar', 'Calculate the tip and split the bill.', ['Bill amount', 'Tip (%)', 'Number of people'], (b, t, p) => { p = Math.max(1, Math.round(p)); const tip = b * t / 100; return `Tip: ${money(tip)}\nTotal: ${money(b + tip)}\nPer person: ${money((b + tip) / p)}`; }, ['1200', '10', '4']);
+calc2('profit-loss-calculator', 'Profit & Loss Calculator', 'chart-pie', 'Calculate profit or loss percentage.', ['Cost price', 'Selling price'], (c, s) => { if (c === 0) return 'Cost price cannot be zero.'; const d = s - c; return `${d >= 0 ? 'Profit' : 'Loss'}: ${money(Math.abs(d))} (${fmt(Math.abs(d / c * 100))}%)`; }, ['500', '650']);
+calc2('markup-margin-calculator', 'Markup & Margin Calculator', 'sack-dollar', 'Calculate markup and gross margin from cost and price.', ['Cost', 'Selling price'], (c, s) => `Profit: ${money(s - c)}\nMarkup: ${c ? fmt((s - c) / c * 100) + '%' : 'n/a'}\nMargin: ${s ? fmt((s - c) / s * 100) + '%' : 'n/a'}`, ['60', '100']);
+calc2('emi-calculator', 'EMI Loan Calculator', 'house-chimney', 'Calculate monthly EMI, total interest and payment.', ['Loan amount', 'Annual interest rate (%)', 'Tenure (months)'], (p, r, n) => { const m = r / 1200; const e = m === 0 ? p / n : p * m * Math.pow(1 + m, n) / (Math.pow(1 + m, n) - 1); return `Monthly EMI: ${money(e)}\nTotal payment: ${money(e * n)}\nTotal interest: ${money(e * n - p)}`; }, ['1000000', '8.5', '120']);
+calc2('cagr-calculator', 'CAGR Calculator', 'chart-line', 'Compound annual growth rate between two values.', ['Beginning value', 'Ending value', 'Years'], (a, b, y) => a <= 0 || y <= 0 ? 'Beginning value and years must be positive.' : `CAGR: ${fmt((Math.pow(b / a, 1 / y) - 1) * 100, 8)}%`, ['10000', '25000', '5']);
+calc2('bmi-calculator', 'BMI Calculator', 'weight-scale', 'Calculate Body Mass Index from weight and height.', ['Weight (kg)', 'Height (cm)'], (w, h) => { const b = w / Math.pow(h / 100, 2); const c = b < 18.5 ? 'Underweight' : b < 25 ? 'Normal weight' : b < 30 ? 'Overweight' : 'Obese'; return `BMI: ${b.toFixed(1)}\nCategory: ${c}`; }, ['70', '170']);
+calc2('average-speed-calculator', 'Average Speed Calculator', 'gauge-high', 'Calculate speed from distance and time.', ['Distance (km)', 'Time (hours)'], (d, t) => t === 0 ? 'Time cannot be zero.' : `Average speed: ${fmt(d / t)} km/h (${fmt(d / t / 3.6)} m/s)`, ['150', '2.5']);
+const lst = (id, title, icon, desc, fn) => add(id, title, M, ic(icon), desc, [ta('text', 'Numbers', 'Separate with commas, spaces or new lines')], 'Calculate', i => { const n = nums(i.text); return n.length ? fn(n) : 'Enter at least one valid number.'; });
+const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
+const median = a => { const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+const modeOf = a => { const c = {}; a.forEach(x => c[x] = (c[x] || 0) + 1); const mx = Math.max(...Object.values(c)); return mx === 1 ? null : Object.keys(c).filter(k => c[k] === mx).map(Number); };
+const variance = (a, samp) => { const m = mean(a); return a.reduce((s, x) => s + (x - m) * (x - m), 0) / (a.length - (samp ? 1 : 0)); };
+lst('average-calculator', 'Average (Mean) Calculator', 'calculator', 'Calculate the arithmetic mean of numbers.', a => `Count: ${a.length}\nSum: ${fmt(a.reduce((x, y) => x + y, 0))}\nAverage: ${fmt(mean(a))}`);
+lst('median-calculator', 'Median Calculator', 'align-center', 'Find the median of a set of numbers.', a => 'Median: ' + fmt(median(a)));
+lst('mode-calculator', 'Mode Calculator', 'ranking-star', 'Find the most frequent number(s).', a => { const m = modeOf(a); return m ? 'Mode: ' + m.map(x => fmt(x)).join(', ') : 'No mode (all values are unique).'; });
+lst('range-calculator', 'Range, Min & Max Calculator', 'arrows-left-right', 'Find minimum, maximum and range.', a => `Min: ${fmt(Math.min(...a))}\nMax: ${fmt(Math.max(...a))}\nRange: ${fmt(Math.max(...a) - Math.min(...a))}`);
+lst('sum-calculator', 'Sum & Product Calculator', 'plus', 'Add or multiply a list of numbers.', a => `Sum: ${fmt(a.reduce((x, y) => x + y, 0))}\nProduct: ${fmt(a.reduce((x, y) => x * y, 1))}`);
+lst('geometric-mean-calculator', 'Geometric Mean Calculator', 'superscript', 'Calculate the geometric mean (positive numbers).', a => a.some(x => x <= 0) ? 'All numbers must be positive.' : 'Geometric mean: ' + fmt(Math.exp(mean(a.map(Math.log)))));
+lst('statistics-summary', 'Descriptive Statistics Summary', 'square-poll-vertical', 'Mean, median, mode, variance and standard deviation in one go.', a => { const m = modeOf(a); return `Count: ${a.length}\nSum: ${fmt(a.reduce((x, y) => x + y, 0))}\nMean: ${fmt(mean(a))}\nMedian: ${fmt(median(a))}\nMode: ${m ? m.join(', ') : 'none'}\nMin / Max: ${fmt(Math.min(...a))} / ${fmt(Math.max(...a))}\nPopulation std dev: ${fmt(Math.sqrt(variance(a)))}\nSample std dev: ${a.length > 1 ? fmt(Math.sqrt(variance(a, true))) : 'n/a'}`; });
+add('standard-deviation-calculator', 'Standard Deviation Calculator', M, ic('bell'), 'Calculate population or sample standard deviation.', [ta('text', 'Numbers', '4, 8, 15, 16, 23, 42'), sl('type', 'Type', ['Sample', 'Population'])], 'Calculate', i => { const a = nums(i.text), s = i.type !== 'Population'; if (a.length < (s ? 2 : 1)) return 'Not enough numbers.'; const v = variance(a, s); return `Mean: ${fmt(mean(a))}\nVariance: ${fmt(v)}\nStandard deviation: ${fmt(Math.sqrt(v))}`; });
+add('variance-calculator', 'Variance Calculator', M, ic('bell'), 'Calculate population or sample variance.', [ta('text', 'Numbers', '4, 8, 15, 16, 23, 42'), sl('type', 'Type', ['Sample', 'Population'])], 'Calculate', i => { const a = nums(i.text), s = i.type !== 'Population'; if (a.length < (s ? 2 : 1)) return 'Not enough numbers.'; return 'Variance: ' + fmt(variance(a, s)); });
+lst('gcd-calculator', 'GCD (HCF) Calculator', 'divide', 'Greatest common divisor of two or more integers.', a => a.some(x => !Number.isInteger(x)) ? 'Use whole numbers only.' : 'GCD: ' + a.reduce(gcd));
+lst('lcm-calculator', 'LCM Calculator', 'divide', 'Least common multiple of two or more integers.', a => { if (a.some(x => !Number.isInteger(x) || x === 0)) return 'Use non-zero whole numbers only.'; return 'LCM: ' + fmt(a.reduce((x, y) => Math.abs(x * y) / gcd(x, y))); });
+calc2('factorial-calculator', 'Factorial Calculator', 'exclamation', 'Calculate n! (up to 2000, exact).', ['Number (n)'], n => { if (!Number.isInteger(n) || n < 0 || n > 2000) return 'Enter a whole number from 0 to 2000.'; let r = 1n; for (let k = 2n; k <= BigInt(n); k++) r *= k; const s = r.toString(); return `${n}! = ${s.length > 300 ? s.slice(0, 300) + '...' : s}\nDigits: ${s.length}`; }, ['10']);
+const isPrime = n => { if (n < 2 || !Number.isInteger(n)) return false; if (n < 4) return true; if (n % 2 === 0 || n % 3 === 0) return false; for (let k = 5; k * k <= n; k += 6) if (n % k === 0 || n % (k + 2) === 0) return false; return true; };
+calc2('prime-number-checker', 'Prime Number Checker', 'hashtag', 'Check whether a number is prime.', ['Number'], n => { if (!Number.isInteger(n) || n < 0 || n > 9e15) return 'Enter a whole number up to 9,000,000,000,000,000.'; return isPrime(n) ? `${n} is a prime number.` : `${n} is not a prime number.`; }, ['97']);
+calc2('prime-factorization', 'Prime Factorization Calculator', 'diagram-project', 'Break a number into its prime factors.', ['Number'], n => { if (!Number.isInteger(n) || n < 2 || n > 9e15) return 'Enter a whole number from 2 to 9e15.'; const f = {}; let x = n; for (let d = 2; d * d <= x; d += d === 2 ? 1 : 2) while (x % d === 0) { f[d] = (f[d] || 0) + 1; x /= d; } if (x > 1) f[x] = (f[x] || 0) + 1; return `${n} = ` + Object.keys(f).map(k => f[k] > 1 ? `${k}^${f[k]}` : k).join(' x '); }, ['360']);
+calc2('primes-in-range', 'Prime Numbers in Range', 'list-ol', 'List all primes between two numbers (max 100,000 span).', ['From', 'To'], (a, b) => { if (b < a || b - a > 100000) return 'Use a range with From <= To and a span of at most 100,000.'; const r = []; for (let k = Math.max(2, Math.ceil(a)); k <= b; k++) if (isPrime(k)) r.push(k); return `${r.length} prime(s):\n` + r.join(', '); }, ['1', '100']);
+calc2('fibonacci-calculator', 'Fibonacci Calculator', 'seedling', 'Get the nth Fibonacci number and the series.', ['Term (n, up to 1000)'], n => { if (!Number.isInteger(n) || n < 0 || n > 1000) return 'Enter a whole number from 0 to 1000.'; let a = 0n, b = 1n; const s = []; for (let k = 0; k <= n; k++) { if (k < 30) s.push(a.toString()); [a, b] = [b, a + b]; } return `F(${n}) = ${(b - a).toString()}\nFirst terms: ${s.join(', ')}`; }, ['20']);
+calc2('square-root-calculator', 'Square Root Calculator', 'square-root-variable', 'Calculate the square root of a number.', ['Number'], n => n < 0 ? `sqrt(${fmt(n)}) = ${fmt(Math.sqrt(-n))}i (imaginary)` : `sqrt(${fmt(n)}) = ${fmt(Math.sqrt(n))}\n${Number.isInteger(Math.sqrt(n)) ? 'Perfect square.' : 'Not a perfect square.'}`, ['144']);
+calc2('cube-root-calculator', 'Cube Root Calculator', 'cube', 'Calculate the cube root of a number.', ['Number'], n => `cbrt(${fmt(n)}) = ${fmt(Math.cbrt(n))}`, ['27']);
+calc2('nth-root-calculator', 'Nth Root Calculator', 'square-root-variable', 'Calculate the nth root of a number.', ['Number', 'Root (n)'], (x, n) => (x < 0 && n % 2 === 0) || n === 0 ? 'No real root for these values.' : `${fmt(n)}th root of ${fmt(x)} = ${fmt(x < 0 ? -Math.pow(-x, 1 / n) : Math.pow(x, 1 / n))}`, ['256', '4']);
+calc2('exponent-calculator', 'Exponent (Power) Calculator', 'superscript', 'Raise a number to a power.', ['Base', 'Exponent'], (b, e) => `${fmt(b)}^${fmt(e)} = ${fmt(Math.pow(b, e))}`, ['2', '10']);
+calc2('logarithm-calculator', 'Logarithm Calculator', 'wave-square', 'Calculate log base 10, natural log and any base.', ['Number', 'Custom base (optional, e.g. 2)'], (x, b) => x <= 0 ? 'Number must be positive.' : `log10(${fmt(x)}) = ${fmt(Math.log10(x))}\nln(${fmt(x)}) = ${fmt(Math.log(x))}\nlog2(${fmt(x)}) = ${fmt(Math.log2(x))}\nlog base ${fmt(b)} = ${b > 0 && b !== 1 ? fmt(Math.log(x) / Math.log(b)) : 'n/a'}`, ['100', '5']);
+add('ratio-calculator', 'Ratio Calculator', M, ic('divide'), 'Simplify a ratio and solve A : B = C : X.', [nm('a', 'A', '4'), nm('b', 'B', '6'), nm('c', 'C (optional)', '10')], 'Calculate', i => { const a = nv(i.a), b = nv(i.b), c = nv(i.c); if (bad(a, b)) return ERR; const k = 1e6, g = gcd(Math.round(a * k), Math.round(b * k)); let r = g ? `Simplified ratio: ${Math.round(a * k) / g} : ${Math.round(b * k) / g}\nDecimal: ${fmt(a / b)}` : 'Ratio cannot be zero:zero.'; if (isFinite(c) && a !== 0) r += `\n${fmt(a)} : ${fmt(b)} = ${fmt(c)} : ${fmt(c * b / a)}`; return r; });
+add('fraction-reducer', 'Fraction Reducer (Simplifier)', M, ic('divide'), 'Reduce a fraction to lowest terms.', [nm('n', 'Numerator', '18'), nm('d', 'Denominator', '24')], 'Simplify', i => { const n = nv(i.n), d = nv(i.d); if (bad(n, d) || !Number.isInteger(n) || !Number.isInteger(d) || d === 0) return 'Enter whole numbers with a non-zero denominator.'; const g = gcd(n, d) || 1, sn = n / g * Math.sign(d), sd = Math.abs(d) / g; return `${n}/${d} = ${sn}/${sd}\nGCD: ${g}\nDecimal: ${fmt(sn / sd)}` + (Math.abs(sn) > sd ? `\nMixed number: ${Math.trunc(sn / sd)} ${Math.abs(sn) % sd}/${sd}` : ''); });
+add('fraction-calculator', 'Fraction Calculator', M, ic('divide'), 'Add, subtract, multiply or divide two fractions.', [tx('a', 'Fraction 1', '1/2'), sl('op', 'Operation', ['+', '-', '×', '÷']), tx('b', 'Fraction 2', '3/4')], 'Calculate', i => { const p = s => { const m = S(s).trim().match(/^(-?\d+)\s*\/\s*(-?\d+)$/) || S(s).trim().match(/^(-?\d+)()$/); if (!m) return null; const d = m[2] === '' ? 1 : +m[2]; return d === 0 ? null : [+m[1], d]; }; const a = p(i.a), b = p(i.b); if (!a || !b) return 'Enter fractions like 3/4 or whole numbers.'; let n, d; if (i.op === '+') { n = a[0] * b[1] + b[0] * a[1]; d = a[1] * b[1]; } else if (i.op === '-') { n = a[0] * b[1] - b[0] * a[1]; d = a[1] * b[1]; } else if (i.op === '×') { n = a[0] * b[0]; d = a[1] * b[1]; } else { if (b[0] === 0) return 'Cannot divide by zero.'; n = a[0] * b[1]; d = a[1] * b[0]; } const g = gcd(n, d) || 1; n /= g; d /= g; if (d < 0) { n = -n; d = -d; } return `Result: ${n}/${d}\nDecimal: ${fmt(n / d)}`; });
+calc2('decimal-to-fraction', 'Decimal to Fraction Converter', 'divide', 'Convert a decimal number to a simplified fraction.', ['Decimal'], x => { let h1 = 1, h0 = 0, k1 = 0, k0 = 1, b = Math.abs(x), i = 0; do { const a = Math.floor(b); [h1, h0] = [a * h1 + h0, h1]; [k1, k0] = [a * k1 + k0, k1]; b = 1 / (b - a); i++; } while (Math.abs(Math.abs(x) - h1 / k1) > 1e-9 && i < 40 && isFinite(b)); return `${fmt(x)} = ${x < 0 ? '-' : ''}${h1}/${k1}`; }, ['0.375']);
+add('fraction-to-decimal', 'Fraction to Decimal Converter', M, ic('divide'), 'Convert a fraction to a decimal and percentage.', [nm('n', 'Numerator', '3'), nm('d', 'Denominator', '8')], 'Convert', i => { const n = nv(i.n), d = nv(i.d); if (bad(n, d) || d === 0) return 'Enter valid numbers with a non-zero denominator.'; return `Decimal: ${fmt(n / d)}\nPercentage: ${fmt(n / d * 100)}%`; });
+add('quadratic-equation-solver', 'Quadratic Equation Solver', M, ic('superscript'), 'Solve ax² + bx + c = 0.', [nm('a', 'a', '1'), nm('b', 'b', '-3'), nm('c', 'c', '2')], 'Solve', i => { const a = nv(i.a), b = nv(i.b), c = nv(i.c); if (bad(a, b, c)) return ERR; if (a === 0) return b === 0 ? 'Not an equation.' : 'Linear equation: x = ' + fmt(-c / b); const d = b * b - 4 * a * c; if (d > 0) return `Discriminant: ${fmt(d)}\nTwo real roots:\nx1 = ${fmt((-b + Math.sqrt(d)) / (2 * a))}\nx2 = ${fmt((-b - Math.sqrt(d)) / (2 * a))}`; if (d === 0) return `Discriminant: 0\nOne real root: x = ${fmt(-b / (2 * a))}`; const re = -b / (2 * a), im = Math.sqrt(-d) / (2 * a); return `Discriminant: ${fmt(d)}\nTwo complex roots:\nx1 = ${fmt(re)} + ${fmt(Math.abs(im))}i\nx2 = ${fmt(re)} - ${fmt(Math.abs(im))}i`; });
+add('pythagorean-theorem-calculator', 'Pythagorean Theorem Calculator', M, ic('play'), 'Find the missing side of a right triangle (leave one blank).', [nm('a', 'Side a', '3'), nm('b', 'Side b', '4'), nm('c', 'Hypotenuse c', '')], 'Calculate', i => { const a = nv(i.a), b = nv(i.b), c = nv(i.c); if (isFinite(a) && isFinite(b)) return `c = ${fmt(Math.hypot(a, b))}`; if (isFinite(a) && isFinite(c)) return c <= a ? 'Hypotenuse must be longer than side a.' : `b = ${fmt(Math.sqrt(c * c - a * a))}`; if (isFinite(b) && isFinite(c)) return c <= b ? 'Hypotenuse must be longer than side b.' : `a = ${fmt(Math.sqrt(c * c - b * b))}`; return 'Enter any two sides and leave the third blank.'; });
+calc2('circle-calculator', 'Circle Calculator', 'circle', 'Area, circumference and diameter from the radius.', ['Radius'], r => `Diameter: ${fmt(2 * r)}\nCircumference: ${fmt(2 * Math.PI * r)}\nArea: ${fmt(Math.PI * r * r)}`, ['7']);
+calc2('triangle-area-calculator', 'Triangle Area Calculator (Heron)', 'play', 'Calculate triangle area from its three sides.', ['Side a', 'Side b', 'Side c'], (a, b, c) => { if (a + b <= c || a + c <= b || b + c <= a || Math.min(a, b, c) <= 0) return 'These sides cannot form a triangle.'; const s = (a + b + c) / 2; return `Area: ${fmt(Math.sqrt(s * (s - a) * (s - b) * (s - c)))}\nPerimeter: ${fmt(a + b + c)}`; }, ['3', '4', '5']);
+calc2('rectangle-calculator', 'Rectangle Calculator', 'square', 'Area, perimeter and diagonal of a rectangle.', ['Length', 'Width'], (l, w) => `Area: ${fmt(l * w)}\nPerimeter: ${fmt(2 * (l + w))}\nDiagonal: ${fmt(Math.hypot(l, w))}`, ['10', '5']);
+calc2('sphere-calculator', 'Sphere Calculator', 'globe', 'Volume and surface area of a sphere.', ['Radius'], r => `Volume: ${fmt(4 / 3 * Math.PI * r * r * r)}\nSurface area: ${fmt(4 * Math.PI * r * r)}`, ['5']);
+calc2('cylinder-calculator', 'Cylinder Calculator', 'database', 'Volume and surface area of a cylinder.', ['Radius', 'Height'], (r, h) => `Volume: ${fmt(Math.PI * r * r * h)}\nSurface area: ${fmt(2 * Math.PI * r * (r + h))}`, ['3', '10']);
+add('permutation-combination-calculator', 'Permutation & Combination Calculator', M, ic('shuffle'), 'Calculate nPr and nCr.', [nm('n', 'n (total items)', '10'), nm('r', 'r (chosen items)', '3')], 'Calculate', i => { const n = nv(i.n), r = nv(i.r); if (!Number.isInteger(n) || !Number.isInteger(r) || n < 0 || r < 0 || r > n || n > 1000) return 'Enter whole numbers with 0 <= r <= n <= 1000.'; let p = 1n; for (let k = 0; k < r; k++) p *= BigInt(n - k); let f = 1n; for (let k = 2n; k <= BigInt(r); k++) f *= k; return `nPr = ${p}\nnCr = ${p / f}`; });
+calc2('arithmetic-progression', 'Arithmetic Progression Calculator', 'bars-staggered', 'nth term and sum of an arithmetic progression.', ['First term (a)', 'Common difference (d)', 'Number of terms (n)'], (a, d, n) => `nth term: ${fmt(a + (n - 1) * d)}\nSum of n terms: ${fmt(n / 2 * (2 * a + (n - 1) * d))}`, ['2', '3', '10']);
+calc2('geometric-progression', 'Geometric Progression Calculator', 'bars-staggered', 'nth term and sum of a geometric progression.', ['First term (a)', 'Common ratio (r)', 'Number of terms (n)'], (a, r, n) => `nth term: ${fmt(a * Math.pow(r, n - 1))}\nSum of n terms: ${r === 1 ? fmt(a * n) : fmt(a * (Math.pow(r, n) - 1) / (r - 1))}`, ['2', '3', '6']);
+const parseBase = (str, b) => { str = S(str).trim().toLowerCase().replace(/[\s_]/g, ''); let neg = false; if (str[0] === '-') { neg = true; str = str.slice(1); } if (b === 16) str = str.replace(/^0x/, ''); if (b === 2) str = str.replace(/^0b/, ''); if (b === 8) str = str.replace(/^0o/, ''); if (!str) return null; let v = 0n; for (const ch of str) { const d = parseInt(ch, 36); if (isNaN(d) || d >= b) return null; v = v * BigInt(b) + BigInt(d); } return neg ? -v : v; };
+const BN = { 2: 'Binary', 8: 'Octal', 10: 'Decimal', 16: 'Hexadecimal' };
+[2, 8, 10, 16].forEach(a => [2, 8, 10, 16].forEach(b => { if (a === b) return; add(`${BN[a].toLowerCase()}-to-${BN[b].toLowerCase()}`, `${BN[a]} to ${BN[b]} Converter`, M, ic('binary'), `Convert ${BN[a].toLowerCase()} numbers to ${BN[b].toLowerCase()}.`, [tx('v', BN[a] + ' number', a === 2 ? '101010' : a === 16 ? '2A' : '42')], 'Convert', i => { const v = parseBase(i.v, a); return v === null ? `Invalid ${BN[a].toLowerCase()} number.` : v.toString(b).toUpperCase(); }); }));
+const bsel = Array.from({ length: 35 }, (_, k) => String(k + 2));
+add('number-base-converter', 'Number Base Converter (2-36)', M, ic('binary'), 'Convert numbers between any bases from 2 to 36.', [tx('v', 'Number', 'FF'), sl('from', 'From base', bsel.slice()), sl('to', 'To base', bsel.slice())], 'Convert', i => { const f = +i.from || 10, t = +i.to || 10, v = parseBase(i.v, f); return v === null ? 'Invalid number for base ' + f + '.' : v.toString(t).toUpperCase(); });
+add('binary-hex-decimal-calculator', 'Binary / Decimal / Hex Calculator', M, ic('microchip'), 'Do arithmetic and bitwise operations in binary, decimal, octal or hex.', [tx('a', 'Number A', '1010'), sl('op', 'Operation', ['+', '-', '×', '÷ (integer)', '% (remainder)', 'AND', 'OR', 'XOR', '<<', '>>']), tx('b', 'Number B', '11'), sl('base', 'Input base', ['Binary (2)', 'Octal (8)', 'Decimal (10)', 'Hexadecimal (16)'])], 'Calculate', i => { const b = +(S(i.base).match(/\((\d+)\)/) || [0, 10])[1], x = parseBase(i.a, b), y = parseBase(i.b, b); if (x === null || y === null) return 'Invalid number for the selected base.'; let r; switch (i.op) { case '+': r = x + y; break; case '-': r = x - y; break; case '×': r = x * y; break; case '÷ (integer)': if (y === 0n) return 'Cannot divide by zero.'; r = x / y; break; case '% (remainder)': if (y === 0n) return 'Cannot divide by zero.'; r = x % y; break; case 'AND': r = x & y; break; case 'OR': r = x | y; break; case 'XOR': r = x ^ y; break; case '<<': r = x << y; break; default: r = x >> y; } return `Binary: ${r.toString(2)}\nOctal: ${r.toString(8)}\nDecimal: ${r.toString(10)}\nHexadecimal: ${r.toString(16).toUpperCase()}`; });
+add('rounding-calculator', 'Rounding Calculator', M, ic('bullseye'), 'Round a number to decimals, tens or hundreds.', [nm('v', 'Number', '3.14159'), nm('d', 'Decimal places (negative = tens, hundreds)', '2'), sl('mode', 'Mode', ['Nearest', 'Round up (ceil)', 'Round down (floor)', 'Truncate'])], 'Round', i => { const v = nv(i.v), d = parseInt(i.d); if (bad(v) || isNaN(d)) return ERR; const f = Math.pow(10, d), fn = { 'Nearest': Math.round, 'Round up (ceil)': Math.ceil, 'Round down (floor)': Math.floor, 'Truncate': Math.trunc }[i.mode] || Math.round; return fmt(fn(v * f) / f); });
+calc2('scientific-notation-converter', 'Scientific Notation Converter', 'e', 'Convert a number to scientific notation.', ['Number'], n => { const e = n.toExponential(); return `Scientific: ${e}\nE-notation: ${e.replace('e+', 'E').replace('e', 'E')}\nStandard: ${fmt(n)}`; }, ['123456.789']);
+const ONES = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'], TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
+const b1000 = n => { const p = []; if (n >= 100) { p.push(ONES[Math.floor(n / 100)] + ' hundred'); n %= 100; } if (n >= 20) { p.push(TENS[Math.floor(n / 10)] + (n % 10 ? '-' + ONES[n % 10] : '')); } else if (n > 0) p.push(ONES[n]); return p.join(' '); };
+const numWords = (n, ind) => { if (n === 0) return 'zero'; const parts = []; const sc = ind ? [[1e7, 'crore'], [1e5, 'lakh'], [1e3, 'thousand']] : [[1e12, 'trillion'], [1e9, 'billion'], [1e6, 'million'], [1e3, 'thousand']]; for (const [v, w] of sc) if (n >= v) { const q = Math.floor(n / v); parts.push((q >= 1000 ? numWords(q, ind) : b1000(q)) + ' ' + w); n %= v; } if (n > 0) parts.push(b1000(n)); return parts.join(' '); };
+add('number-to-words', 'Number to Words Converter', M, ic('spell-check'), 'Write numbers in words (international or Indian system).', [nm('n', 'Number', '1234567'), sl('sys', 'Number system', ['International', 'Indian (lakh / crore)'])], 'Convert', i => { const n = nv(i.n); if (bad(n) || Math.abs(n) > 9e15 || !Number.isInteger(n)) return 'Enter a whole number up to 9,000,000,000,000,000.'; return (n < 0 ? 'minus ' : '') + numWords(Math.abs(n), i.sys && i.sys.startsWith('Indian')); });
+calc2('gpa-percentage-converter', 'CGPA to Percentage Converter', 'graduation-cap', 'Convert CGPA (out of 10) to percentage.', ['CGPA'], c => c < 0 || c > 10 ? 'CGPA must be between 0 and 10.' : `Percentage (CBSE formula 9.5 × CGPA): ${fmt(c * 9.5)}%`, ['8.4']);
+
+/* =====================================================================
+   4. UNIT CONVERTERS (algorithmic generators)
+   ===================================================================== */
+const U = CAT.UNIT;
+const lin = (n, s, f) => ({ n, s, to: v => v * f, from: b => b / f, f });
+const UNITS = {
+  length: ['Length', 'ruler', [lin('Millimeters', 'mm', 0.001), lin('Centimeters', 'cm', 0.01), lin('Meters', 'm', 1), lin('Kilometers', 'km', 1000), lin('Inches', 'in', 0.0254), lin('Feet', 'ft', 0.3048), lin('Yards', 'yd', 0.9144), lin('Miles', 'mi', 1609.344), lin('Nautical Miles', 'nmi', 1852), lin('Micrometers', 'µm', 1e-6)], ['Millimeters', 'Centimeters', 'Meters', 'Kilometers', 'Inches', 'Feet', 'Yards', 'Miles']],
+  weight: ['Weight', 'weight-hanging', [lin('Milligrams', 'mg', 1e-6), lin('Grams', 'g', 0.001), lin('Kilograms', 'kg', 1), lin('Pounds', 'lb', 0.45359237), lin('Ounces', 'oz', 0.028349523125), lin('Metric Tons', 't', 1000), lin('Stones', 'st', 6.35029318), lin('Quintals', 'q', 100), lin('Carats', 'ct', 0.0002), lin('Tolas', 'tola', 0.011664)], ['Milligrams', 'Grams', 'Kilograms', 'Pounds', 'Ounces', 'Metric Tons']],
+  temperature: ['Temperature', 'temperature-half', [{ n: 'Celsius', s: '°C', to: v => v, from: b => b }, { n: 'Fahrenheit', s: '°F', to: v => (v - 32) * 5 / 9, from: b => b * 9 / 5 + 32 }, { n: 'Kelvin', s: 'K', to: v => v - 273.15, from: b => b + 273.15 }, { n: 'Rankine', s: '°R', to: v => (v - 491.67) * 5 / 9, from: b => b * 9 / 5 + 491.67 }], ['Celsius', 'Fahrenheit', 'Kelvin']],
+  speed: ['Speed', 'gauge-high', [lin('Kilometers per Hour', 'km/h', 1 / 3.6), lin('Miles per Hour', 'mph', 0.44704), lin('Meters per Second', 'm/s', 1), lin('Knots', 'kn', 1852 / 3600), lin('Feet per Second', 'ft/s', 0.3048), lin('Mach', 'Ma', 340.29)], ['Kilometers per Hour', 'Miles per Hour', 'Meters per Second', 'Knots']],
+  area: ['Area', 'vector-square', [lin('Square Meters', 'm²', 1), lin('Square Feet', 'ft²', 0.09290304), lin('Acres', 'ac', 4046.8564224), lin('Hectares', 'ha', 10000), lin('Square Kilometers', 'km²', 1e6), lin('Square Inches', 'in²', 0.00064516), lin('Square Yards', 'yd²', 0.83612736), lin('Square Miles', 'mi²', 2589988.110336)], ['Square Meters', 'Square Feet', 'Acres', 'Hectares']],
+  volume: ['Volume', 'flask', [lin('Milliliters', 'mL', 0.001), lin('Liters', 'L', 1), lin('Gallons (US)', 'gal', 3.785411784), lin('Gallons (UK)', 'gal UK', 4.54609), lin('Cubic Meters', 'm³', 1000), lin('Cups (US)', 'cup', 0.2365882365), lin('Fluid Ounces (US)', 'fl oz', 0.0295735295625), lin('Pints (US)', 'pt', 0.473176473), lin('Quarts (US)', 'qt', 0.946352946), lin('Tablespoons', 'tbsp', 0.01478676478125), lin('Teaspoons', 'tsp', 0.00492892159375)], ['Milliliters', 'Liters', 'Gallons (US)']],
+  storage: ['Digital Storage', 'hard-drive', [lin('Bits', 'bit', 0.125), lin('Bytes', 'B', 1), lin('Kilobytes', 'KB', 1024), lin('Megabytes', 'MB', 1048576), lin('Gigabytes', 'GB', 1073741824), lin('Terabytes', 'TB', 1099511627776), lin('Petabytes', 'PB', 1125899906842624)], ['Bits', 'Bytes', 'Kilobytes', 'Megabytes', 'Gigabytes', 'Terabytes']],
+  pressure: ['Pressure', 'gauge', [lin('Pascals', 'Pa', 1), lin('Kilopascals', 'kPa', 1000), lin('Bars', 'bar', 1e5), lin('PSI', 'psi', 6894.757293168), lin('Atmospheres', 'atm', 101325), lin('mmHg', 'mmHg', 133.322387415), lin('Torr', 'Torr', 101325 / 760)], ['Pascals', 'Kilopascals', 'Bars', 'PSI']],
+  energy: ['Energy', 'bolt', [lin('Joules', 'J', 1), lin('Kilojoules', 'kJ', 1000), lin('Calories', 'cal', 4.184), lin('Kilocalories', 'kcal', 4184), lin('Watt-hours', 'Wh', 3600), lin('Kilowatt-hours', 'kWh', 3.6e6), lin('BTU', 'BTU', 1055.05585262), lin('Foot-pounds', 'ft·lb', 1.3558179483)], ['Joules', 'Kilojoules', 'Kilocalories', 'Kilowatt-hours']],
+  time: ['Time', 'clock', [lin('Milliseconds', 'ms', 0.001), lin('Seconds', 's', 1), lin('Minutes', 'min', 60), lin('Hours', 'h', 3600), lin('Days', 'd', 86400), lin('Weeks', 'wk', 604800), lin('Months', 'mo', 2629746), lin('Years', 'yr', 31556952)], ['Seconds', 'Minutes', 'Hours', 'Days', 'Weeks']],
+  angle: ['Angle', 'compass-drafting', [lin('Degrees', '°', 1), lin('Radians', 'rad', 180 / Math.PI), lin('Gradians', 'grad', 0.9), lin('Turns', 'turn', 360), lin('Arcminutes', "'", 1 / 60), lin('Arcseconds', '"', 1 / 3600)], []],
+  power: ['Power', 'plug', [lin('Watts', 'W', 1), lin('Kilowatts', 'kW', 1000), lin('Megawatts', 'MW', 1e6), lin('Horsepower', 'hp', 745.69987158227), lin('BTU per Hour', 'BTU/h', 0.29307107)], []],
+  frequency: ['Frequency', 'wave-square', [lin('Hertz', 'Hz', 1), lin('Kilohertz', 'kHz', 1e3), lin('Megahertz', 'MHz', 1e6), lin('Gigahertz', 'GHz', 1e9), lin('RPM', 'rpm', 1 / 60)], []]
+};
+Object.keys(UNITS).forEach(key => {
+  const [cname, icon, units, pairNames] = UNITS[key]; const label = u => `${u.n} (${u.s})`; const byLabel = {}; units.forEach(u => byLabel[label(u)] = u);
+  add(`${key}-converter`, `${cname} Converter`, U, ic(icon), `Convert between all common ${cname.toLowerCase()} units.`, [nm('value', 'Value', 'Enter a number'), sl('from', 'From', units.map(label)), sl('to', 'To', units.map(label))], 'Convert', i => { const v = nv(i.value), A = byLabel[i.from] || units[0], B = byLabel[i.to] || units[1] || units[0]; if (bad(v)) return ERR; return `${fmt(v)} ${A.s} = ${fmt(B.from(A.to(v)))} ${B.s}\n\nAll ${cname.toLowerCase()} units:\n` + units.map(u => `${fmt(u.from(A.to(v)))} ${u.s}`).join('\n'); });
+  pairNames.forEach(an => pairNames.forEach(bn => {
+    if (an === bn) return; const A = units.find(u => u.n === an), B = units.find(u => u.n === bn);
+    add(`${slug(an)}-to-${slug(bn)}`, `${an} to ${bn}`, U, ic(icon), `Convert ${an.toLowerCase()} to ${bn.toLowerCase()} instantly.`, [nm('value', `Value in ${an}`, 'Enter a number')], 'Convert', i => { const v = nv(i.value); if (bad(v)) return ERR; return `${fmt(v)} ${A.s} = ${fmt(B.from(A.to(v)))} ${B.s}\n1 ${A.s} = ${fmt(B.from(A.to(1)))} ${B.s}`; });
+  }));
+});
+// fuel economy (non-linear)
+add('mpg-to-km-per-liter', 'MPG to Kilometers per Liter', U, ic('gas-pump'), 'Convert US miles per gallon to km/L.', [nm('v', 'Miles per gallon (US)', '30')], 'Convert', i => { const v = nv(i.v); return bad(v) ? ERR : `${fmt(v)} mpg = ${fmt(v * 0.425143707)} km/L`; });
+add('km-per-liter-to-mpg', 'Kilometers per Liter to MPG', U, ic('gas-pump'), 'Convert km/L to US miles per gallon.', [nm('v', 'Kilometers per liter', '15')], 'Convert', i => { const v = nv(i.v); return bad(v) ? ERR : `${fmt(v)} km/L = ${fmt(v / 0.425143707)} mpg`; });
+add('mpg-to-l-per-100km', 'MPG to Liters per 100 km', U, ic('gas-pump'), 'Convert US mpg to L/100 km.', [nm('v', 'Miles per gallon (US)', '30')], 'Convert', i => { const v = nv(i.v); return bad(v) || v <= 0 ? ERR : `${fmt(v)} mpg = ${fmt(235.214583 / v)} L/100km`; });
+add('l-per-100km-to-mpg', 'Liters per 100 km to MPG', U, ic('gas-pump'), 'Convert L/100 km to US mpg.', [nm('v', 'Liters per 100 km', '8')], 'Convert', i => { const v = nv(i.v); return bad(v) || v <= 0 ? ERR : `${fmt(v)} L/100km = ${fmt(235.214583 / v)} mpg`; });
+add('feet-inches-to-cm', 'Feet & Inches to Centimeters', U, ic('person'), 'Convert height in feet and inches to centimeters.', [nm('ft', 'Feet', '5'), nm('in', 'Inches', '9')], 'Convert', i => { const f = nv(i.ft), n = nv(i.in || 0); if (bad(f) || bad(n)) return ERR; return `${fmt(f)} ft ${fmt(n)} in = ${fmt((f * 12 + n) * 2.54)} cm`; });
+add('cm-to-feet-inches', 'Centimeters to Feet & Inches', U, ic('person'), 'Convert height in centimeters to feet and inches.', [nm('cm', 'Centimeters', '175')], 'Convert', i => { const c = nv(i.cm); if (bad(c)) return ERR; const t = c / 2.54; return `${fmt(c)} cm = ${Math.floor(t / 12)} ft ${fmt(t % 12, 4)} in`; });
+
+/* =====================================================================
+   5. EVERYDAY UTILITIES & TIME
+   ===================================================================== */
+const E = CAT.LIFE;
+add('age-calculator', 'Age Calculator', E, ic('cake-candles'), 'Calculate exact age in years, months and days.', [tx('dob', 'Date of birth', 'YYYY-MM-DD or DD/MM/YYYY'), tx('on', 'Age at date (blank = today)', 'YYYY-MM-DD')], 'Calculate Age', i => { const b = pd(i.dob), t = S(i.on).trim() ? pd(i.on) : today(); if (!b || !t) return DERR; if (b > t) return 'Date of birth must be before the target date.'; const [y, m, d] = ymd(b, t); const days = Math.round((t - b) / DAY); let nb = new Date(Date.UTC(t.getUTCFullYear(), b.getUTCMonth(), b.getUTCDate())); if (nb < t) nb = new Date(Date.UTC(t.getUTCFullYear() + 1, b.getUTCMonth(), b.getUTCDate())); return `Age: ${y} years, ${m} months, ${d} days\nTotal months: ${y * 12 + m}\nTotal weeks: ${Math.floor(days / 7)}\nTotal days: ${days}\nTotal hours: ${days * 24}\nBorn on a: ${DAYS[b.getUTCDay()]}\nNext birthday: ${fd(nb)} (in ${Math.round((nb - t) / DAY)} days)`; });
+add('date-difference-calculator', 'Date Difference Calculator', E, ic('calendar-days'), 'Find the time between two dates.', [tx('a', 'Start date', 'YYYY-MM-DD'), tx('b', 'End date', 'YYYY-MM-DD')], 'Calculate', i => { let a = pd(i.a), b = pd(i.b); if (!a || !b) return DERR; if (a > b) [a, b] = [b, a]; const [y, m, d] = ymd(a, b), days = Math.round((b - a) / DAY); return `Difference: ${y} years, ${m} months, ${d} days\nTotal days: ${days}\nTotal weeks: ${fmt(days / 7, 6)}\nTotal hours: ${days * 24}`; });
+add('add-days-to-date', 'Add / Subtract Days from Date', E, ic('calendar-plus'), 'Add or subtract days, weeks, months or years to a date.', [tx('d', 'Start date', 'YYYY-MM-DD'), nm('n', 'Amount (negative to subtract)', '30'), sl('u', 'Unit', ['Days', 'Weeks', 'Months', 'Years'])], 'Calculate', i => { const d = pd(i.d), n = parseInt(i.n); if (!d || isNaN(n)) return DERR; const r = new Date(d.getTime()); if (i.u === 'Months') r.setUTCMonth(r.getUTCMonth() + n); else if (i.u === 'Years') r.setUTCFullYear(r.getUTCFullYear() + n); else r.setUTCDate(r.getUTCDate() + n * (i.u === 'Weeks' ? 7 : 1)); return `Result: ${fd(r)} (${DAYS[r.getUTCDay()]})`; });
+add('countdown-timer', 'Countdown Calculator', E, ic('hourglass-start'), 'See the time remaining until a future date and time.', [tx('t', 'Target date & time', 'YYYY-MM-DD HH:MM')], 'Start Countdown', i => { const m = S(i.t).trim().match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2}))?$/); if (!m) return 'Use format YYYY-MM-DD HH:MM'; const t = new Date(+m[1], m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0)); let s = Math.floor((t - Date.now()) / 1000); const over = s < 0; s = Math.abs(s); return `${over ? 'Time since' : 'Time remaining'}: ${Math.floor(s / 86400)} days, ${Math.floor(s % 86400 / 3600)} hours, ${Math.floor(s % 3600 / 60)} minutes, ${s % 60} seconds`; });
+calc2('leap-year-checker', 'Leap Year Checker', 'calendar-check', 'Check whether a year is a leap year.', ['Year'], y => !Number.isInteger(y) || y < 1 ? 'Enter a valid year.' : `${y} is ${isLeap(y) ? '' : 'not '}a leap year (${isLeap(y) ? 366 : 365} days).`, ['2028']);
+add('day-of-week-finder', 'Day of the Week Finder', E, ic('calendar-day'), 'Find which weekday any date falls on.', [tx('d', 'Date', 'YYYY-MM-DD or DD/MM/YYYY')], 'Find Day', i => { const d = pd(i.d); return d ? `${fd(d)} is a ${DAYS[d.getUTCDay()]}.` : DERR; });
+add('day-of-year-calculator', 'Day of Year & Week Number', E, ic('calendar'), 'Find the day number and ISO week number of a date.', [tx('d', 'Date', 'YYYY-MM-DD')], 'Calculate', i => { const d = pd(i.d); if (!d) return DERR; const doy = Math.round((d - Date.UTC(d.getUTCFullYear(), 0, 1)) / DAY) + 1; const t = new Date(d.getTime()); t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7)); const wk = Math.ceil(((t - Date.UTC(t.getUTCFullYear(), 0, 1)) / DAY + 1) / 7); return `Day of year: ${doy} of ${isLeap(d.getUTCFullYear()) ? 366 : 365}\nISO week number: ${wk}\nWeekday: ${DAYS[d.getUTCDay()]}\nDays remaining in year: ${(isLeap(d.getUTCFullYear()) ? 366 : 365) - doy}`; });
+calc2('days-in-month-calculator', 'Days in Month Calculator', 'calendar', 'Find how many days a month has.', ['Year', 'Month (1-12)'], (y, m) => m < 1 || m > 12 || !Number.isInteger(m) ? 'Month must be 1-12.' : `${MONTHS[m - 1]} ${y} has ${dim(y, m - 1)} days.`, ['2024', '2']);
+add('business-days-calculator', 'Business Days Calculator', E, ic('briefcase'), 'Count working days (Mon-Fri) between two dates.', [tx('a', 'Start date', 'YYYY-MM-DD'), tx('b', 'End date', 'YYYY-MM-DD')], 'Calculate', i => { let a = pd(i.a), b = pd(i.b); if (!a || !b) return DERR; if (a > b) [a, b] = [b, a]; let w = 0, we = 0; for (let t = a.getTime(); t <= b.getTime(); t += DAY) { const g = new Date(t).getUTCDay(); if (g === 0 || g === 6) we++; else w++; } return `Working days (inclusive): ${w}\nWeekend days: ${we}\nTotal calendar days: ${w + we}`; });
+add('work-hours-calculator', 'Work Hours Calculator', E, ic('business-time'), 'Calculate hours worked between start and end times.', [tx('s', 'Start time', '09:00'), tx('e', 'End time', '17:30'), nm('b', 'Unpaid break (minutes)', '30'), nm('r', 'Hourly rate (optional)', '')], 'Calculate', i => { const s = ptime(i.s), e = ptime(i.e), b = nv(i.b || 0) || 0; if (s === null || e === null) return 'Use time format HH:MM (24h) or 9:00 AM.'; let m = e - s; if (m < 0) m += 1440; m -= b; if (m < 0) return 'Break is longer than the shift.'; const h = m / 60; let r = `Worked: ${Math.floor(m / 60)} h ${m % 60} min\nDecimal hours: ${h.toFixed(2)}\n5-day week: ${(h * 5).toFixed(2)} h`; const rate = nv(i.r); if (isFinite(rate)) r += `\nEarnings for this shift: ${money(h * rate)}`; return r; });
+add('time-difference-calculator', 'Time Duration Calculator', E, ic('clock'), 'Find the duration between two times of day.', [tx('s', 'Start time', '08:15'), tx('e', 'End time', '17:45')], 'Calculate', i => { const s = ptime(i.s), e = ptime(i.e); if (s === null || e === null) return 'Use time format HH:MM.'; let m = e - s; if (m < 0) m += 1440; return `Duration: ${Math.floor(m / 60)} h ${m % 60} min (${m} minutes, ${(m / 60).toFixed(2)} hours)`; });
+add('time-adder', 'Add Time (HH:MM) Calculator', E, ic('plus'), 'Add hours and minutes to a time of day.', [tx('t', 'Start time', '14:30'), nm('h', 'Hours to add', '2'), nm('m', 'Minutes to add', '45')], 'Calculate', i => { const t = ptime(i.t), h = nv(i.h || 0), m = nv(i.m || 0); if (t === null || bad(h, m)) return 'Use time format HH:MM.'; const r = ((t + h * 60 + m) % 1440 + 1440) % 1440, dd = Math.floor((t + h * 60 + m) / 1440); return `Result: ${pad(Math.floor(r / 60))}:${pad(Math.round(r % 60))}${dd ? ` (${dd > 0 ? '+' : ''}${dd} day)` : ''}`; });
+one(E, 'time-12h-to-24h', '12-Hour to 24-Hour Time Converter', 'clock', 'Convert 12-hour clock times to 24-hour format.', s => { const m = ptime(s); return m === null ? 'Use format like 3:45 PM.' : `${pad(Math.floor(m / 60))}:${pad(m % 60)}`; }, 'Convert', 'Time', '3:45 PM');
+one(E, 'time-24h-to-12h', '24-Hour to 12-Hour Time Converter', 'clock', 'Convert 24-hour times to 12-hour AM/PM format.', s => { const m = ptime(s); if (m === null) return 'Use format like 15:45.'; const h = Math.floor(m / 60); return `${h % 12 || 12}:${pad(m % 60)} ${h < 12 ? 'AM' : 'PM'}`; }, 'Convert', 'Time', '15:45');
+calc2('hours-to-decimal', 'Hours & Minutes to Decimal Hours', 'stopwatch', 'Convert hours and minutes into decimal hours.', ['Hours', 'Minutes'], (h, m) => `${fmt(h)} h ${fmt(m)} min = ${(h + m / 60).toFixed(4)} hours`, ['7', '45']);
+calc2('decimal-to-hours', 'Decimal Hours to Hours & Minutes', 'stopwatch', 'Convert decimal hours to hours and minutes.', ['Decimal hours'], d => { const m = Math.round(d * 60); return `${fmt(d)} hours = ${Math.floor(m / 60)} h ${m % 60} min`; }, ['7.75']);
+const TZ = ['UTC', 'Asia/Kolkata', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'America/Sao_Paulo', 'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Moscow', 'Africa/Cairo', 'Africa/Johannesburg', 'Asia/Dubai', 'Asia/Karachi', 'Asia/Dhaka', 'Asia/Bangkok', 'Asia/Singapore', 'Asia/Shanghai', 'Asia/Tokyo', 'Asia/Seoul', 'Australia/Sydney', 'Pacific/Auckland'];
+const tzOff = (ms, z) => { const p = {}; new Intl.DateTimeFormat('en-US', { timeZone: z, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).formatToParts(new Date(ms)).forEach(x => p[x.type] = x.value); return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) - Math.floor(ms / 1000) * 1000; };
+add('time-zone-converter', 'Time Zone Converter', E, ic('earth-asia'), 'Convert a date and time between time zones.', [tx('t', 'Date & time', 'YYYY-MM-DD HH:MM'), sl('from', 'From zone', TZ.slice()), sl('to', 'To zone', TZ.slice())], 'Convert', i => { const m = S(i.t).trim().match(/^(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{2})$/); if (!m) return 'Use format YYYY-MM-DD HH:MM'; try { const g = Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5]); let u = g - tzOff(g, i.from || 'UTC'); u = g - tzOff(u, i.from || 'UTC'); return `${i.from || 'UTC'}: ${S(i.t).trim()}\n${i.to || 'UTC'}: ` + new Intl.DateTimeFormat('en-GB', { timeZone: i.to || 'UTC', dateStyle: 'full', timeStyle: 'short' }).format(new Date(u)); } catch (e) { return 'Time zone conversion is not supported in this browser.'; } });
+add('world-clock', 'World Clock', E, ic('globe'), 'See the current time in major cities around the world.', [sl('fmt', 'Time format', ['12-hour', '24-hour'])], 'Show Times', i => { try { return TZ.map(z => z.padEnd(22) + new Intl.DateTimeFormat('en-GB', { timeZone: z, weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: i.fmt !== '24-hour' }).format(new Date())).join('\n'); } catch (e) { return 'Time zones are not supported in this browser.'; } });
+add('birthday-countdown', 'Birthday Countdown', E, ic('gift'), 'Days left until your next birthday.', [tx('dob', 'Date of birth', 'YYYY-MM-DD')], 'Calculate', i => { const b = pd(i.dob); if (!b) return DERR; const t = today(); let nb = new Date(Date.UTC(t.getUTCFullYear(), b.getUTCMonth(), b.getUTCDate())); if (nb < t) nb = new Date(Date.UTC(t.getUTCFullYear() + 1, b.getUTCMonth(), b.getUTCDate())); const d = Math.round((nb - t) / DAY); return d === 0 ? 'Happy Birthday! It is today.' : `Next birthday: ${fd(nb)} (${DAYS[nb.getUTCDay()]})\nDays left: ${d}\nTurning: ${nb.getUTCFullYear() - b.getUTCFullYear()}`; });
+add('zodiac-sign-finder', 'Zodiac Sign Finder', E, ic('star'), 'Find your Western zodiac sign and Chinese zodiac animal.', [tx('dob', 'Date of birth', 'YYYY-MM-DD')], 'Find Sign', i => { const b = pd(i.dob); if (!b) return DERR; const m = b.getUTCMonth() + 1, d = b.getUTCDate(), x = m * 100 + d; const Z = [[120, 'Capricorn'], [219, 'Aquarius'], [321, 'Pisces'], [420, 'Aries'], [521, 'Taurus'], [621, 'Gemini'], [723, 'Cancer'], [823, 'Leo'], [923, 'Virgo'], [1023, 'Libra'], [1122, 'Scorpio'], [1222, 'Sagittarius']]; const w = (Z.find(z => x < z[0]) || [0, 'Capricorn'])[1]; const C = ['Monkey', 'Rooster', 'Dog', 'Pig', 'Rat', 'Ox', 'Tiger', 'Rabbit', 'Dragon', 'Snake', 'Horse', 'Goat']; return `Western zodiac: ${w}\nChinese zodiac (by calendar year): ${C[b.getUTCFullYear() % 12]}`; });
+add('pregnancy-due-date-calculator', 'Pregnancy Due Date Calculator', E, ic('baby'), 'Estimate due date from the last menstrual period (LMP).', [tx('d', 'First day of last period', 'YYYY-MM-DD')], 'Calculate', i => { const d = pd(i.d); if (!d) return DERR; const due = new Date(d.getTime() + 280 * DAY), t = today(), g = Math.floor((t - d) / DAY); return `Estimated due date: ${fd(due)} (${DAYS[due.getUTCDay()]})\n` + (g >= 0 && g <= 300 ? `Current gestation: ${Math.floor(g / 7)} weeks ${g % 7} days\n` : '') + 'This is an estimate only; consult your doctor.'; });
+const R = [[1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'], [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'], [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']];
+calc2('number-to-roman', 'Number to Roman Numerals', 'landmark', 'Convert numbers (1-3999) to Roman numerals.', ['Number'], n => { if (!Number.isInteger(n) || n < 1 || n > 3999) return 'Enter a whole number from 1 to 3999.'; let r = ''; R.forEach(p => { while (n >= p[0]) { r += p[1]; n -= p[0]; } }); return r; }, ['2025']);
+one(E, 'roman-to-number', 'Roman Numerals to Number', 'landmark', 'Convert Roman numerals to numbers.', s => { s = s.trim().toUpperCase(); if (!/^M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$/.test(s) || !s) return 'Invalid Roman numeral (valid range I-MMMCMXCIX).'; const v = { I: 1, V: 5, X: 10, L: 50, C: 100, D: 500, M: 1000 }; let t = 0; for (let k = 0; k < s.length; k++) t += v[s[k]] < (v[s[k + 1]] || 0) ? -v[s[k]] : v[s[k]]; return String(t); }, 'Convert', 'Roman numeral', 'MMXXV');
+add('morse-code-player', 'Morse Code Player', E, ic('volume-high'), 'Convert text to Morse code and play it as beeps.', [tx('text', 'Text to play', 'SOS')], 'Play Morse', i => { const m = toMorse(i.text); if (!m) return 'Enter some text.'; playMorse(m); return `Morse: ${m}\n(Playing audio in your browser...)`; });
+add('dice-roller', 'Random Dice Roller', E, ic('dice'), 'Roll one or more dice with any number of sides.', [nm('n', 'Number of dice', '2'), sl('sides', 'Sides', ['4', '6', '8', '10', '12', '20', '100'])], 'Roll', i => { const n = Math.min(Math.max(parseInt(i.n) || 1, 1), 100), s = parseInt(i.sides) || 6; const r = Array.from({ length: n }, () => rnd(s) + 1); return `Rolls: ${r.join(', ')}\nTotal: ${r.reduce((a, b) => a + b, 0)}`; });
+add('coin-flipper', 'Coin Flipper', E, ic('coins'), 'Flip a virtual coin one or many times.', [nm('n', 'Number of flips', '1')], 'Flip', i => { const n = Math.min(Math.max(parseInt(i.n) || 1, 1), 1000); let h = 0; const r = Array.from({ length: n }, () => { const x = rnd(2); h += x; return x ? 'Heads' : 'Tails'; }); return n === 1 ? r[0] : `Heads: ${h}\nTails: ${n - h}\n\n` + (n <= 50 ? r.join(', ') : ''); });
+add('random-number-generator', 'Random Number Generator', E, ic('hashtag'), 'Generate random integers in a range.', [nm('min', 'Minimum', '1'), nm('max', 'Maximum', '100'), nm('n', 'How many?', '5'), sl('u', 'Unique values only?', ['No', 'Yes'])], 'Generate', i => { let a = Math.floor(nv(i.min)), b = Math.floor(nv(i.max)), n = Math.min(Math.max(parseInt(i.n) || 1, 1), 1000); if (bad(a, b)) return ERR; if (a > b) [a, b] = [b, a]; const range = b - a + 1; if (i.u === 'Yes') { if (n > range) return `Cannot pick ${n} unique values from a range of ${range}.`; const s = new Set(); while (s.size < n) s.add(a + rnd(range)); return [...s].join(', '); } return Array.from({ length: n }, () => a + rnd(range)).join(', '); });
+add('rock-paper-scissors', 'Rock Paper Scissors Simulator', E, ic('hand-scissors'), 'Play Rock Paper Scissors against the computer.', [sl('c', 'Your move', ['Rock', 'Paper', 'Scissors'])], 'Play', i => { const m = ['Rock', 'Paper', 'Scissors'], u = m.indexOf(i.c) < 0 ? 0 : m.indexOf(i.c), c = rnd(3), r = (u - c + 3) % 3; return `You: ${m[u]}\nComputer: ${m[c]}\nResult: ${r === 0 ? 'Draw!' : r === 1 ? 'You win!' : 'Computer wins!'}`; });
+one(E, 'random-picker', 'Random Name / Item Picker', 'wand-magic-sparkles', 'Pick a random winner from a list.', s => { const a = lines(s).map(x => x.trim()).filter(Boolean); return a.length ? 'Winner: ' + pick(a) : 'Enter at least one item per line.'; }, 'Pick', 'Items (one per line)', 'Asha\nRahul\nPriya');
+add('team-splitter', 'Random Team Generator', E, ic('users'), 'Randomly split names into teams.', [ta('text', 'Names (one per line)', 'Asha\nRahul\nPriya\nVikram'), nm('t', 'Number of teams', '2')], 'Split', i => { const a = shuffle(lines(i.text).map(x => x.trim()).filter(Boolean)), t = Math.min(Math.max(parseInt(i.t) || 2, 1), 50); if (!a.length) return 'Enter some names.'; const teams = Array.from({ length: t }, () => []); a.forEach((x, k) => teams[k % t].push(x)); return teams.map((x, k) => `Team ${k + 1}: ${x.join(', ')}`).join('\n'); });
+add('magic-8-ball', 'Magic 8 Ball', E, ic('circle-question'), 'Ask a yes/no question and get a random answer.', [tx('q', 'Your question', 'Will it rain today?')], 'Ask', i => i.q && S(i.q).trim() ? pick(['It is certain.', 'Without a doubt.', 'Yes, definitely.', 'Most likely.', 'Signs point to yes.', 'Reply hazy, try again.', 'Ask again later.', 'Cannot predict now.', "Don't count on it.", 'My sources say no.', 'Very doubtful.', 'Outlook not so good.']) : 'Type a question first.');
+add('lottery-number-generator', 'Lottery Number Generator', E, ic('ticket'), 'Generate random lottery numbers.', [nm('n', 'Numbers per ticket', '6'), nm('max', 'Highest number', '49'), nm('t', 'Tickets', '3')], 'Generate', i => { const n = parseInt(i.n) || 6, mx = parseInt(i.max) || 49, t = Math.min(parseInt(i.t) || 1, 50); if (n > mx || n < 1) return 'Numbers per ticket cannot exceed the highest number.'; return Array.from({ length: t }, (_, k) => `Ticket ${k + 1}: ` + shuffle(Array.from({ length: mx }, (_, x) => x + 1)).slice(0, n).sort((a, b) => a - b).join(', ')).join('\n'); });
+calc2('percentage-of-year-passed', 'Year Progress Calculator', 'bars-progress', 'See how much of the year has passed.', ['Year'], y => { const a = Date.UTC(y, 0, 1), b = Date.UTC(y + 1, 0, 1), n = Date.now(); const p = Math.min(1, Math.max(0, (n - a) / (b - a))); return `${y} is ${(p * 100).toFixed(2)}% complete\nDays left: ${Math.max(0, Math.ceil((b - n) / DAY))}`; }, [String(new Date().getFullYear())]);
+add('salary-converter', 'Salary Converter (Hourly / Monthly / Yearly)', E, ic('money-bill-wave'), 'Convert pay between hourly, daily, weekly, monthly and yearly.', [nm('v', 'Amount', '25'), sl('p', 'Per', ['Hour', 'Day', 'Week', 'Month', 'Year']), nm('h', 'Hours per week', '40')], 'Convert', i => { const v = nv(i.v), h = nv(i.h || 40); if (bad(v, h) || h <= 0) return ERR; const hr = { Hour: v, Day: v / (h / 5), Week: v / h, Month: v * 12 / (52 * h), Year: v / (52 * h) }[i.p] || v; return `Hourly: ${money(hr)}\nDaily: ${money(hr * h / 5)}\nWeekly: ${money(hr * h)}\nMonthly: ${money(hr * h * 52 / 12)}\nYearly: ${money(hr * h * 52)}`; });
+
+/* =====================================================================
+   6. SECURITY & HASHING
+   ===================================================================== */
+const X = CAT.SEC;
+const CH = { lower: 'abcdefghijklmnopqrstuvwxyz', upper: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', digit: '0123456789', sym: '!@#$%^&*()-_=+[]{};:,.<>?/~' };
+const AMB = /[Il1O0o]/g;
+function genPwd(len, sets, noAmb) {
+  sets = sets.map(s => noAmb ? s.replace(AMB, '') : s).filter(Boolean); const all = sets.join(''); const out = sets.map(s => pick(s.split('')));
+  while (out.length < len) out.push(pick(all.split(''))); return shuffle(out).slice(0, len).join('');
+}
+const PW = { 'All characters': [CH.lower, CH.upper, CH.digit, CH.sym], 'Letters & numbers': [CH.lower, CH.upper, CH.digit], 'Letters only': [CH.lower, CH.upper], 'Numbers only': [CH.digit], 'Lowercase only': [CH.lower] };
+add('strong-password-generator', 'Strong Password Generator', X, ic('key'), 'Generate cryptographically secure random passwords.', [nm('len', 'Length (4-128)', '16'), nm('n', 'How many?', '5'), sl('type', 'Character set', Object.keys(PW)), sl('amb', 'Avoid look-alike characters (Il1O0)?', ['No', 'Yes'])], 'Generate', i => { const len = Math.min(Math.max(parseInt(i.len) || 16, 4), 128), n = Math.min(Math.max(parseInt(i.n) || 1, 1), 100), sets = PW[i.type] || PW['All characters']; if (sets.length > len) return 'Length too short for the chosen character set.'; return Array.from({ length: n }, () => genPwd(len, sets, i.amb === 'Yes')).join('\n'); });
+[12, 16, 20, 24, 32, 48, 64].forEach(len => add(`password-generator-${len}`, `${len}-Character Password Generator`, X, ic('lock'), `Generate secure ${len}-character passwords instantly.`, [nm('n', 'How many?', '3')], 'Generate', i => Array.from({ length: Math.min(Math.max(parseInt(i.n) || 1, 1), 50) }, () => genPwd(len, PW['All characters'])).join('\n')));
+add('alphanumeric-password-generator', 'Alphanumeric Password Generator', X, ic('font'), 'Passwords with letters and numbers only (no symbols).', [nm('len', 'Length', '16'), nm('n', 'How many?', '3')], 'Generate', i => Array.from({ length: Math.min(Math.max(parseInt(i.n) || 1, 1), 50) }, () => genPwd(Math.min(Math.max(parseInt(i.len) || 16, 3), 128), PW['Letters & numbers'])).join('\n'));
+[4, 6, 8].forEach(len => add(`${len}-digit-pin-generator`, `${len}-Digit PIN Generator`, X, ic('hashtag'), `Generate random ${len}-digit PIN codes.`, [nm('n', 'How many?', '5')], 'Generate', i => Array.from({ length: Math.min(Math.max(parseInt(i.n) || 1, 1), 50) }, () => Array.from({ length: len }, () => rnd(10)).join('')).join('\n')));
+const WL = 'able acid acre aged also arch area army atom aunt away axis baby back bake bald band bank barn base bath beam bear beat beef bell belt bend bike bird blow blue boat body bold bolt bone book boot born boss bowl brick bulb bull burn bush busy cabin cake calm camp cane card care cart cash cast cave cell chef chip city clay clip clock cloud coal coat code coin cold cook cool copper coral corn cost crab crane crew crop crow cube curl dairy damp dance dark dart dawn deck deer desk dish dock dolls door dove draw dream drum duck dust eagle earth east echo edge elbow ember empty entry fair fall farm fast fern field film fire fish flag flame flax float flock floor flute foam fog fork fort frog fruit gale game gate gift glad glass glow goat gold grain grape grass gulf hail hall hand harp hawk hay heart hill hive hold home honey hood hook horn house hunt idea inch iron isle jade jazz jewel join joke jump jungle keen kelp kite knee knot lake lamp land lane lark leaf lemon lens lily lime link lion loaf lock loop lunar lush mail maple march mask maze meal melon mint mist moon moss moth muse nail nest nine noble north note oak oasis ocean olive onion orbit otter oval oven owl paint palm panda paper park path pearl pier pine plum polar pond port quail quartz quest quiet quilt rain ranch raven reed reef ridge ring river road robin rock roof rope rose sage sail salt sand scarf seal seed shell ship silk silver sky slate snow soap sock solar south spark spoon star stone storm sugar sun swan table tent tide tiger toast tower trail tree tulip turtle vase velvet vine violet wagon wall wave wheat willow wind wolf wood wool yarn yellow zebra zinc'.split(' ');
+add('passphrase-generator', 'Passphrase Generator', X, ic('comments'), 'Create memorable, secure multi-word passphrases.', [nm('w', 'Number of words', '5'), tx('sep', 'Separator', '-'), sl('cap', 'Capitalize words?', ['Yes', 'No']), sl('num', 'Add a number?', ['Yes', 'No']), nm('n', 'How many?', '3')], 'Generate', i => { const w = Math.min(Math.max(parseInt(i.w) || 5, 2), 20), n = Math.min(Math.max(parseInt(i.n) || 1, 1), 30), sep = i.sep === undefined ? '-' : S(i.sep); const bits = (w * Math.log2(WL.length) + (i.num === 'No' ? 0 : Math.log2(100))).toFixed(0); return Array.from({ length: n }, () => { let p = Array.from({ length: w }, () => { const x = pick(WL); return i.cap === 'No' ? x : cap(x); }); if (i.num !== 'No') p.push(String(rnd(100))); return p.join(sep); }).join('\n') + `\n\nEstimated entropy: ~${bits} bits`; });
+[3, 4, 6].forEach(w => add(`${w}-word-passphrase-generator`, `${w}-Word Passphrase Generator`, X, ic('comments'), `Generate memorable ${w}-word passphrases.`, [nm('n', 'How many?', '3')], 'Generate', i => Array.from({ length: Math.min(Math.max(parseInt(i.n) || 1, 1), 30) }, () => Array.from({ length: w }, () => cap(pick(WL))).join('-')).join('\n') + `\n\nEstimated entropy: ~${(w * Math.log2(WL.length)).toFixed(0)} bits`));
+add('wifi-password-generator', 'WiFi Password Generator', X, ic('wifi'), 'Generate easy-to-type but strong WiFi passwords.', [nm('n', 'How many?', '3')], 'Generate', i => Array.from({ length: Math.min(Math.max(parseInt(i.n) || 1, 1), 30) }, () => pick(WL) + pick(WL).toUpperCase().slice(0, 1) + pick(WL).slice(1) + '-' + (1000 + rnd(9000)) + pick(['!', '#', '$', '%', '*'])).join('\n'));
+add('api-key-generator', 'API Key / Token Generator', X, ic('code'), 'Generate random API keys and tokens.', [nm('bytes', 'Length in bytes (8-128)', '32'), sl('enc', 'Encoding', ['Hex', 'Base64URL', 'Alphanumeric']), tx('prefix', 'Prefix (optional)', 'sk_live_'), nm('n', 'How many?', '3')], 'Generate', i => { const bl = Math.min(Math.max(parseInt(i.bytes) || 32, 8), 128), n = Math.min(Math.max(parseInt(i.n) || 1, 1), 50); return Array.from({ length: n }, () => { let k; if (i.enc === 'Base64URL') { let r = ''; const b = randBytes(bl); for (let x = 0; x < b.length; x++) r += String.fromCharCode(b[x]); k = btoa(r).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); } else if (i.enc === 'Alphanumeric') k = Array.from({ length: bl }, () => pick((CH.lower + CH.upper + CH.digit).split(''))).join(''); else k = toHex(randBytes(bl)); return S(i.prefix) + k; }).join('\n'); });
+add('random-salt-generator', 'Random Salt Generator', X, ic('shield-halved'), 'Generate cryptographically secure random salts.', [nm('bytes', 'Salt size in bytes', '16'), sl('enc', 'Encoding', ['Hex', 'Base64']), nm('n', 'How many?', '3')], 'Generate', i => { const bl = Math.min(Math.max(parseInt(i.bytes) || 16, 4), 256), n = Math.min(Math.max(parseInt(i.n) || 1, 1), 50); return Array.from({ length: n }, () => { const b = randBytes(bl); return i.enc === 'Base64' ? btoa(String.fromCharCode.apply(null, b)) : toHex(b); }).join('\n'); });
+add('secure-random-hex', 'Random Hex String Generator', X, ic('hashtag'), 'Generate random hexadecimal strings.', [nm('len', 'Length (characters)', '32'), nm('n', 'How many?', '3')], 'Generate', i => Array.from({ length: Math.min(Math.max(parseInt(i.n) || 1, 1), 50) }, () => toHex(randBytes(Math.ceil((Math.min(Math.max(parseInt(i.len) || 32, 1), 512)) / 2))).slice(0, Math.min(Math.max(parseInt(i.len) || 32, 1), 512))).join('\n'));
+add('otp-code-generator', 'Random OTP Code Generator', X, ic('mobile-screen'), 'Generate random numeric one-time codes.', [nm('len', 'Digits', '6'), nm('n', 'How many?', '3')], 'Generate', i => Array.from({ length: Math.min(Math.max(parseInt(i.n) || 1, 1), 50) }, () => Array.from({ length: Math.min(Math.max(parseInt(i.len) || 6, 3), 12) }, () => rnd(10)).join('')).join('\n'));
+add('username-generator', 'Random Username Generator', X, ic('user'), 'Generate random usernames.', [nm('n', 'How many?', '8')], 'Generate', i => Array.from({ length: Math.min(Math.max(parseInt(i.n) || 1, 1), 50) }, () => pick(WL) + pick(['_', '.', '']) + pick(WL) + (10 + rnd(990))).join('\n'));
+
+// --- hashing implementations ---
+const rotl = (x, n) => (x << n) | (x >>> (32 - n));
+function md5(bytes) {
+  const K = [], R = [7, 12, 17, 22, 5, 9, 14, 20, 4, 11, 16, 23, 6, 10, 15, 21]; for (let i = 0; i < 64; i++) K[i] = Math.floor(Math.abs(Math.sin(i + 1)) * 4294967296) >>> 0;
+  const len = bytes.length, nb = ((len + 8) >>> 6) + 1, buf = new Uint8Array(nb * 64); buf.set(bytes); buf[len] = 0x80; const dv = new DataView(buf.buffer); dv.setUint32(nb * 64 - 8, (len * 8) >>> 0, true); dv.setUint32(nb * 64 - 4, Math.floor(len / 536870912), true);
+  let a0 = 0x67452301, b0 = 0xefcdab89 | 0, c0 = 0x98badcfe | 0, d0 = 0x10325476;
+  for (let o = 0; o < nb * 64; o += 64) {
+    const Mw = []; for (let k = 0; k < 16; k++) Mw[k] = dv.getUint32(o + k * 4, true); let A = a0, B = b0, C = c0, D = d0;
+    for (let i = 0; i < 64; i++) { let F, g; if (i < 16) { F = (B & C) | (~B & D); g = i; } else if (i < 32) { F = (D & B) | (~D & C); g = (5 * i + 1) % 16; } else if (i < 48) { F = B ^ C ^ D; g = (3 * i + 5) % 16; } else { F = C ^ (B | ~D); g = (7 * i) % 16; } F = (F + A + K[i] + Mw[g]) | 0; A = D; D = C; C = B; B = (B + rotl(F, R[(i >> 4) * 4 + (i % 4)])) | 0; }
+    a0 = (a0 + A) | 0; b0 = (b0 + B) | 0; c0 = (c0 + C) | 0; d0 = (d0 + D) | 0;
+  }
+  const out = new Uint8Array(16), ov = new DataView(out.buffer); [a0, b0, c0, d0].forEach((v, k) => ov.setUint32(k * 4, v >>> 0, true)); return out;
+}
+function sha1(bytes) {
+  const len = bytes.length, nb = ((len + 8) >>> 6) + 1, buf = new Uint8Array(nb * 64); buf.set(bytes); buf[len] = 0x80; const dv = new DataView(buf.buffer); dv.setUint32(nb * 64 - 4, (len * 8) >>> 0); dv.setUint32(nb * 64 - 8, Math.floor(len / 536870912));
+  let h0 = 0x67452301, h1 = 0xEFCDAB89 | 0, h2 = 0x98BADCFE | 0, h3 = 0x10325476, h4 = 0xC3D2E1F0 | 0;
+  for (let o = 0; o < nb * 64; o += 64) {
+    const w = []; for (let k = 0; k < 16; k++) w[k] = dv.getInt32(o + k * 4); for (let k = 16; k < 80; k++) w[k] = rotl(w[k - 3] ^ w[k - 8] ^ w[k - 14] ^ w[k - 16], 1);
+    let a = h0, b = h1, c = h2, d = h3, e = h4;
+    for (let k = 0; k < 80; k++) { let f, kk; if (k < 20) { f = (b & c) | (~b & d); kk = 0x5A827999; } else if (k < 40) { f = b ^ c ^ d; kk = 0x6ED9EBA1; } else if (k < 60) { f = (b & c) | (b & d) | (c & d); kk = 0x8F1BBCDC | 0; } else { f = b ^ c ^ d; kk = 0xCA62C1D6 | 0; } const t = (rotl(a, 5) + f + e + kk + w[k]) | 0; e = d; d = c; c = rotl(b, 30); b = a; a = t; }
+    h0 = (h0 + a) | 0; h1 = (h1 + b) | 0; h2 = (h2 + c) | 0; h3 = (h3 + d) | 0; h4 = (h4 + e) | 0;
+  }
+  const out = new Uint8Array(20), ov = new DataView(out.buffer); [h0, h1, h2, h3, h4].forEach((v, k) => ov.setUint32(k * 4, v >>> 0)); return out;
+}
+const primesN = n => { const p = []; for (let i = 2; p.length < n; i++) if (p.every(q => i % q)) p.push(i); return p; };
+const iroot = (n, k) => { const K = BigInt(k); let x = 1n << BigInt(Math.ceil(n.toString(2).length / k) + 1); for (; ;) { const y = ((K - 1n) * x + n / (x ** (K - 1n))) / K; if (y >= x) return x; x = y; } };
+const fracBits = (p, k, bits) => iroot(BigInt(p) << BigInt(k * bits), k) & ((1n << BigInt(bits)) - 1n);
+const SHA_CACHE = {};
+function sha2(bytes, w) {
+  const big = w !== 256, Wb = big ? 64 : 32, W = BigInt(Wb), mask = (1n << W) - 1n, rounds = big ? 80 : 64, bs = big ? 128 : 64, lb = big ? 16 : 8;
+  if (!SHA_CACHE[w]) SHA_CACHE[w] = { K: primesN(rounds).map(p => fracBits(p, 3, Wb)), H: w === 384 ? primesN(16).slice(8).map(p => fracBits(p, 2, 64)) : primesN(8).map(p => fracBits(p, 2, Wb)) };
+  const K = SHA_CACHE[w].K; let H = SHA_CACHE[w].H.slice();
+  const rt = big ? [[28, 34, 39], [14, 18, 41], [1, 8, 7], [19, 61, 6]] : [[2, 13, 22], [6, 11, 25], [7, 18, 3], [17, 19, 10]];
+  const rotr = (x, n) => ((x >> BigInt(n)) | (x << (W - BigInt(n)))) & mask;
+  const len = bytes.length, total = Math.ceil((len + 1 + lb) / bs) * bs, buf = new Uint8Array(total); buf.set(bytes); buf[len] = 0x80;
+  let bl = BigInt(len) * 8n; for (let k = 0; k < 8; k++) { buf[total - 1 - k] = Number(bl & 0xffn); bl >>= 8n; }
+  const wb = Wb / 8;
+  for (let o = 0; o < total; o += bs) {
+    const ws = []; for (let k = 0; k < 16; k++) { let v = 0n; for (let j = 0; j < wb; j++) v = (v << 8n) | BigInt(buf[o + k * wb + j]); ws.push(v); }
+    for (let k = 16; k < rounds; k++) { const a = ws[k - 15], b = ws[k - 2]; const s0 = rotr(a, rt[2][0]) ^ rotr(a, rt[2][1]) ^ (a >> BigInt(rt[2][2])); const s1 = rotr(b, rt[3][0]) ^ rotr(b, rt[3][1]) ^ (b >> BigInt(rt[3][2])); ws.push((ws[k - 16] + s0 + ws[k - 7] + s1) & mask); }
+    let [a, b, c, d, e, f, g, h] = H;
+    for (let k = 0; k < rounds; k++) {
+      const S1 = rotr(e, rt[1][0]) ^ rotr(e, rt[1][1]) ^ rotr(e, rt[1][2]); const ch = (e & f) ^ ((~e & mask) & g); const t1 = (h + S1 + ch + K[k] + ws[k]) & mask;
+      const S0 = rotr(a, rt[0][0]) ^ rotr(a, rt[0][1]) ^ rotr(a, rt[0][2]); const mj = (a & b) ^ (a & c) ^ (b & c); const t2 = (S0 + mj) & mask;
+      h = g; g = f; f = e; e = (d + t1) & mask; d = c; c = b; b = a; a = (t1 + t2) & mask;
+    }
+    H = [a, b, c, d, e, f, g, h].map((v, k) => (H[k] + v) & mask);
+  }
+  const n = w === 384 ? 6 : 8, out = new Uint8Array(n * wb); H.slice(0, n).forEach((v, k) => { for (let j = wb - 1; j >= 0; j--) { out[k * wb + j] = Number(v & 0xffn); v >>= 8n; } }); return out;
+}
+const HASHES = { 'MD5': [md5, 64], 'SHA-1': [sha1, 64], 'SHA-256': [b => sha2(b, 256), 64], 'SHA-384': [b => sha2(b, 384), 128], 'SHA-512': [b => sha2(b, 512), 128] };
+const hmac = (name, key, msg) => { const [f, bs] = HASHES[name]; let k = utf8(key); if (k.length > bs) k = f(k); const kp = new Uint8Array(bs); kp.set(k); const ip = kp.map(x => x ^ 0x36), op = kp.map(x => x ^ 0x5c); const m = utf8(msg); const inner = new Uint8Array(bs + m.length); inner.set(ip); inner.set(m, bs); const ih = f(inner); const outer = new Uint8Array(bs + ih.length); outer.set(op); outer.set(ih, bs); return f(outer); };
+Object.keys(HASHES).forEach(name => {
+  const s = slug(name); const f = HASHES[name][0];
+  one(X, `${s}-hash-generator`, `${name} Hash Generator`, 'fingerprint', `Generate the ${name} hash of any text (client-side).`, t => { const h = toHex(f(utf8(t))); return `${name}: ${h}\nUppercase: ${h.toUpperCase()}\nLength: ${h.length * 4} bits`; }, 'Generate Hash', 'Text to hash');
+  add(`${s}-hash-verifier`, `${name} Hash Verifier`, X, ic('circle-check'), `Check whether text matches a given ${name} hash.`, [ta('text', 'Text', 'Original text'), tx('hash', `${name} hash to compare`, 'Paste hash here')], 'Verify', i => { const h = toHex(f(utf8(i.text))), g = S(i.hash).trim().toLowerCase(); return g ? (h === g ? 'MATCH: the hash matches the text.' : 'NO MATCH.\nComputed: ' + h) : 'Paste a hash to compare.'; });
+  if (name !== 'SHA-384') add(`hmac-${s}-generator`, `HMAC-${name} Generator`, X, ic('shield'), `Generate an HMAC using ${name} and a secret key.`, [ta('text', 'Message', 'Message to authenticate'), tx('key', 'Secret key', 'secret')], 'Generate HMAC', i => toHex(hmac(name, S(i.key), S(i.text))));
+});
+one(X, 'all-hashes-generator', 'Multi-Hash Generator (All Algorithms)', 'layer-group', 'Generate MD5, SHA-1, SHA-256, SHA-384 and SHA-512 at once.', t => Object.keys(HASHES).map(n => `${n}: ${toHex(HASHES[n][0](utf8(t)))}`).join('\n'), 'Generate Hashes', 'Text to hash');
+const crcT = (() => { const t = []; for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+one(X, 'crc32-checksum', 'CRC32 Checksum Generator', 'check-double', 'Calculate the CRC32 checksum of text.', t => { let c = 0xFFFFFFFF; utf8(t).forEach(b => { c = crcT[(c ^ b) & 255] ^ (c >>> 8); }); c = (c ^ 0xFFFFFFFF) >>> 0; return `Hex: ${c.toString(16).padStart(8, '0')}\nDecimal: ${c}`; }, 'Calculate', 'Text');
+one(X, 'adler32-checksum', 'Adler-32 Checksum Generator', 'check-double', 'Calculate the Adler-32 checksum of text.', t => { let a = 1, b = 0; utf8(t).forEach(x => { a = (a + x) % 65521; b = (b + a) % 65521; }); const v = ((b << 16) | a) >>> 0; return `Hex: ${v.toString(16).padStart(8, '0')}\nDecimal: ${v}`; }, 'Calculate', 'Text');
+one(X, 'fnv1a-hash-generator', 'FNV-1a Hash Generator', 'fingerprint', 'Generate the 32-bit FNV-1a non-cryptographic hash.', t => { let h = 0x811c9dc5; utf8(t).forEach(b => { h ^= b; h = Math.imul(h, 0x01000193); }); h >>>= 0; return `Hex: ${h.toString(16).padStart(8, '0')}\nDecimal: ${h}`; }, 'Generate Hash', 'Text');
+one(X, 'djb2-hash-generator', 'DJB2 Hash Generator', 'fingerprint', 'Generate the DJB2 non-cryptographic string hash.', t => { let h = 5381; utf8(t).forEach(b => { h = (Math.imul(h, 33) + b) >>> 0; }); return `Hex: ${h.toString(16).padStart(8, '0')}\nDecimal: ${h}`; }, 'Generate Hash', 'Text');
+one(X, 'password-strength-checker', 'Password Strength Checker', 'shield-halved', 'Rate password strength with entropy and tips. Runs locally; nothing is sent.', p => {
+  if (!p) return 'Enter a password to analyze.'; let pool = 0; const k = { lower: /[a-z]/.test(p), upper: /[A-Z]/.test(p), digit: /\d/.test(p), sym: /[^A-Za-z0-9]/.test(p) }; if (k.lower) pool += 26; if (k.upper) pool += 26; if (k.digit) pool += 10; if (k.sym) pool += 32;
+  let ent = p.length * Math.log2(pool || 1); const common = ['password', '123456', 'qwerty', 'letmein', 'admin', 'welcome', 'iloveyou', 'abc123', 'monkey', 'dragon', 'login', 'passw0rd', '111111', 'football']; const tips = []; const lc = p.toLowerCase();
+  if (common.some(c => lc.includes(c))) { ent *= 0.4; tips.push('Contains a very common password or word.'); } if (/(.)\1{2,}/.test(p)) { ent *= 0.8; tips.push('Avoid repeating characters.'); } if (/(?:abc|bcd|cde|def|123|234|345|456|567|678|789|qwe|wer|asd|sdf)/i.test(p)) { ent *= 0.85; tips.push('Avoid keyboard or alphabet sequences.'); }
+  if (p.length < 12) tips.push('Use at least 12 characters.'); if (!k.upper || !k.lower) tips.push('Mix upper and lower case letters.'); if (!k.digit) tips.push('Add numbers.'); if (!k.sym) tips.push('Add symbols.');
+  const lvl = ent < 28 ? 'Very weak' : ent < 36 ? 'Weak' : ent < 60 ? 'Fair' : ent < 80 ? 'Strong' : 'Very strong'; const secs = Math.pow(2, ent) / 1e10 / 2; const t = secs < 1 ? 'instantly' : secs < 60 ? Math.round(secs) + ' seconds' : secs < 3600 ? Math.round(secs / 60) + ' minutes' : secs < 86400 ? Math.round(secs / 3600) + ' hours' : secs < 31557600 ? Math.round(secs / 86400) + ' days' : secs < 3.15e12 ? Math.round(secs / 31557600).toLocaleString() + ' years' : 'millions of years or more';
+  return `Strength: ${lvl}\nLength: ${p.length}\nEstimated entropy: ${ent.toFixed(1)} bits\nTime to brute-force at 10 billion guesses/sec: ${t}` + (tips.length ? '\n\nSuggestions:\n- ' + tips.join('\n- ') : '\n\nNo major weaknesses found.');
+}, 'Check Strength', 'Password', 'Type a password');
+add('password-entropy-calculator', 'Password Entropy Calculator', X, ic('calculator'), 'Calculate entropy from length and character pool size.', [nm('len', 'Password length', '12'), nm('pool', 'Pool size (e.g. 26, 62, 94)', '94')], 'Calculate', i => { const l = nv(i.len), p = nv(i.pool); if (bad(l, p) || l < 1 || p < 2) return ERR; const e = l * Math.log2(p); return `Entropy: ${e.toFixed(2)} bits\nPossible combinations: ${fmt(Math.pow(p, l), 6)}`; });
+add('passphrase-entropy-calculator', 'Passphrase Entropy Calculator', X, ic('calculator'), 'Entropy of a passphrase from word count and list size.', [nm('w', 'Number of words', '5'), nm('l', 'Word list size', '7776')], 'Calculate', i => { const w = nv(i.w), l = nv(i.l); if (bad(w, l) || w < 1 || l < 2) return ERR; return `Entropy: ${(w * Math.log2(l)).toFixed(2)} bits`; });
+add('password-policy-checker', 'Password Policy Validator', X, ic('list-check'), 'Test a password against common policy rules.', [tx('p', 'Password', 'Type a password'), nm('min', 'Minimum length', '12')], 'Validate', i => { const p = S(i.p), m = parseInt(i.min) || 8; const r = [[`At least ${m} characters`, p.length >= m], ['Has lowercase letter', /[a-z]/.test(p)], ['Has uppercase letter', /[A-Z]/.test(p)], ['Has a number', /\d/.test(p)], ['Has a symbol', /[^A-Za-z0-9]/.test(p)], ['No spaces', !/\s/.test(p)], ['No 3+ repeated characters', !/(.)\1{2,}/.test(p)]]; return r.map(x => (x[1] ? '[PASS] ' : '[FAIL] ') + x[0]).join('\n') + `\n\nScore: ${r.filter(x => x[1]).length}/${r.length}`; });
+add('hash-compare-tool', 'Hash / String Compare Tool', X, ic('equals'), 'Compare two hashes or strings safely (ignores case and whitespace).', [tx('a', 'First value', ''), tx('b', 'Second value', '')], 'Compare', i => { const a = S(i.a).trim().toLowerCase(), b = S(i.b).trim().toLowerCase(); return a && b ? (a === b ? 'Values are identical.' : 'Values differ.') : 'Enter both values.'; });
+
+return L;
+})()
+];
