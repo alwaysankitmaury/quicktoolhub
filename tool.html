@@ -1,677 +1,558 @@
 <!DOCTYPE html>
-<html lang="en" class="scroll-smooth">
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Free Online Tool - QuickToolHub</title>
-  <meta id="meta-description" name="description" content="QuickToolHub offers 500+ free online tools: text utilities, developer tools, calculators, converters and more. No sign-up, runs in your browser.">
-  <meta name="author" content="QuickToolHub">
-  <meta id="meta-robots" name="robots" content="index, follow">
-  <link id="link-canonical" rel="canonical" href="">
-  <meta name="theme-color" content="#4f46e5">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Free Online Tool | QuickToolHub</title>
+<meta name="description" content="Free online tools by QuickToolHub.">
+<meta name="theme-color" content="#0f766e">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
 
-  <!-- Open Graph / Twitter (updated dynamically for each tool) -->
-  <meta property="og:type" content="website">
-  <meta property="og:site_name" content="QuickToolHub">
-  <meta id="og-title" property="og:title" content="Free Online Tool - QuickToolHub">
-  <meta id="og-description" property="og:description" content="Free online tools that run in your browser.">
-  <meta id="og-url" property="og:url" content="">
-  <meta name="twitter:card" content="summary">
-  <meta id="tw-title" name="twitter:title" content="Free Online Tool - QuickToolHub">
-  <meta id="tw-description" name="twitter:description" content="Free online tools that run in your browser.">
+<!-- Apply saved theme before paint (prevents flash) -->
+<script>
+(function () {
+  try {
+    var s = localStorage.getItem('theme');
+    var d = s ? s === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+    document.documentElement.classList.toggle('dark', d);
+  } catch (e) {}
+})();
+</script>
 
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%234f46e5'/%3E%3Ctext x='50' y='68' font-size='56' font-family='Arial' font-weight='bold' text-anchor='middle' fill='white'%3EQ%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+<script>
+  tailwind.config = {
+    darkMode: 'class',
+    theme: { extend: { fontFamily: { sans: ['"Instrument Sans"', 'ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif'] } } }
+  };
+</script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
 
-  <!-- Apply saved theme before paint to avoid a flash -->
-  <script>
-    (function () {
-      try {
-        var saved = localStorage.getItem('theme');
-        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-        if (saved === 'dark' || (!saved && prefersDark)) {
-          document.documentElement.classList.add('dark');
-        }
-      } catch (e) {}
-    })();
-  </script>
+<!-- Tools database (the only file that changes when tools are added/removed) -->
+<script src="js/tools-data.js"></script>
 
-  <!-- Tailwind CSS via CDN -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = { darkMode: 'class' };
-  </script>
-
-  <!-- FontAwesome 6 -->
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
-
-  <style>
-    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
-    html.dark { color-scheme: dark; }
-    details > summary { list-style: none; }
-    details > summary::-webkit-details-marker { display: none; }
-    details[open] .faq-chevron { transform: rotate(180deg); }
-    #copy-tooltip { transition: opacity .15s ease, transform .15s ease; }
-  </style>
-
-  <!-- Tool registry (must load before the engine script at the end of <body>) -->
-  <script src="js/tools-data.js"></script>
+<style>
+  textarea { resize: vertical; }
+  .result-box { overflow-wrap: anywhere; }
+  .result-box table { border-collapse: collapse; max-width: 100%; }
+  .result-box th, .result-box td { border: 1px solid rgba(100,116,139,.35); padding: .35rem .6rem; }
+  summary::-webkit-details-marker { display: none; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
 </head>
-<body class="min-h-screen flex flex-col bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 transition-colors duration-200">
 
-  <!-- Navbar -->
-  <header class="sticky top-0 z-50 border-b border-slate-200 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 backdrop-blur">
-    <nav class="max-w-5xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between" aria-label="Main navigation">
-      <a href="index.html" class="flex items-center gap-2 font-extrabold text-xl tracking-tight text-indigo-600 dark:text-indigo-400">
-        <span class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-indigo-600 text-white text-base">Q</span>
+<body class="min-h-screen flex flex-col bg-slate-50 text-slate-800 dark:bg-slate-950 dark:text-slate-200 font-sans antialiased">
+
+<header class="sticky top-0 z-40 border-b border-slate-200 dark:border-slate-800 bg-white/85 dark:bg-slate-900/85 backdrop-blur">
+  <nav class="max-w-5xl mx-auto px-4 h-14 flex items-center justify-between gap-3" aria-label="Main">
+    <div class="flex items-center gap-3 min-w-0">
+      <a href="index.html" class="inline-flex items-center gap-2 text-sm font-medium px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-600" aria-label="Back to home">
+        <i class="fa-solid fa-arrow-left text-xs" aria-hidden="true"></i><span class="hidden sm:inline">Home</span>
+      </a>
+      <a href="index.html" class="flex items-center gap-2 font-bold text-lg tracking-tight truncate focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 rounded">
+        <span class="inline-flex w-7 h-7 items-center justify-center rounded-lg bg-teal-700 text-white text-sm"><i class="fa-solid fa-bolt" aria-hidden="true"></i></span>
         QuickToolHub
       </a>
-      <div class="flex items-center gap-2 sm:gap-4">
-        <a href="index.html" class="text-sm font-medium px-3 py-2 rounded-lg text-slate-600 hover:text-indigo-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:text-indigo-400 dark:hover:bg-slate-800 transition">Home</a>
-        <button id="theme-toggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode"
-          class="w-10 h-10 inline-flex items-center justify-center rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 transition">
-          <i class="fa-solid fa-moon dark:hidden" aria-hidden="true"></i>
-          <i class="fa-solid fa-sun hidden dark:inline" aria-hidden="true"></i>
-        </button>
-      </div>
+    </div>
+    <button id="themeBtn" type="button" class="w-9 h-9 inline-flex items-center justify-center rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-600" aria-label="Toggle dark mode">
+      <i id="themeIcon" class="fa-solid fa-moon" aria-hidden="true"></i>
+    </button>
+  </nav>
+</header>
+
+<!-- Top ad slot -->
+<div class="max-w-5xl w-full mx-auto px-4 mt-4">
+  <div id="ad-top" class="min-h-[90px] flex items-center justify-center rounded-lg border border-dashed border-slate-300 dark:border-slate-700 text-xs text-slate-400" aria-label="Advertisement">
+    <!-- Paste AdSense top banner code here -->
+    Advertisement
+  </div>
+</div>
+
+<main id="app" class="flex-1 w-full max-w-3xl mx-auto px-4 py-8" aria-live="polite">
+  <div class="py-24 text-center text-slate-500"><i class="fa-solid fa-circle-notch fa-spin mr-2" aria-hidden="true"></i>Loading tool…</div>
+</main>
+
+<!-- Bottom ad slot -->
+<div class="max-w-5xl w-full mx-auto px-4 mb-6">
+  <div id="ad-bottom" class="min-h-[90px] flex items-center justify-center rounded-lg border border-dashed border-slate-300 dark:border-slate-700 text-xs text-slate-400" aria-label="Advertisement">
+    <!-- Paste AdSense bottom banner code here -->
+    Advertisement
+  </div>
+</div>
+
+<footer class="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+  <div class="max-w-5xl mx-auto px-4 py-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-sm text-slate-500 dark:text-slate-400">
+    <p>&copy; <span id="year">2025</span> QuickToolHub. All rights reserved.</p>
+    <nav class="flex flex-wrap justify-center gap-x-5 gap-y-1" aria-label="Footer">
+      <a class="hover:text-teal-700 dark:hover:text-teal-400" href="index.html">Home</a>
+      <a class="hover:text-teal-700 dark:hover:text-teal-400" href="privacy.html">Privacy Policy</a>
+      <a class="hover:text-teal-700 dark:hover:text-teal-400" href="terms.html">Terms of Use</a>
+      <a class="hover:text-teal-700 dark:hover:text-teal-400" href="contact.html">Contact</a>
     </nav>
-  </header>
+  </div>
+</footer>
 
-  <main class="flex-1 w-full max-w-4xl mx-auto px-4 sm:px-6 py-8 sm:py-10">
+<script>
+(function () {
+  'use strict';
 
-    <noscript>
-      <div class="rounded-xl border border-amber-300 bg-amber-50 text-amber-900 p-4">JavaScript is required to run this tool. Please enable JavaScript and reload the page.</div>
-    </noscript>
+  /* ---------- helpers ---------- */
+  var $ = function (s, r) { return (r || document).querySelector(s); };
+  var app = $('#app');
+  var esc = function (s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  };
+  var slugify = function (s) { return String(s || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''); };
+  var looksHTML = function (s) { return /<\/?[a-z][\s\S]*?>/i.test(s); };
+  var clean = function (h) {
+    return String(h).replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
+      .replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '').replace(/javascript:/gi, '');
+  };
+  var FIELD = 'w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3.5 py-2.5 text-base placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-teal-600 focus:border-teal-600';
+  var BTN = 'inline-flex items-center justify-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-teal-600 dark:focus-visible:ring-offset-slate-950 transition-colors';
 
-    <!-- ================= 404 STATE ================= -->
-    <section id="state-404" class="hidden text-center py-10 sm:py-16" aria-live="polite">
-      <div class="mx-auto w-20 h-20 rounded-full bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-300 flex items-center justify-center text-3xl mb-6">
-        <i class="fa-solid fa-compass" aria-hidden="true"></i>
-      </div>
-      <h1 class="text-3xl sm:text-4xl font-extrabold tracking-tight">Tool not found</h1>
-      <p id="notfound-message" class="mt-3 text-slate-600 dark:text-slate-400 max-w-xl mx-auto"></p>
-      <a href="index.html" class="mt-6 inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-offset-slate-900 transition">
-        <i class="fa-solid fa-house" aria-hidden="true"></i> Back to Home
-      </a>
-      <div id="suggestions-wrap" class="mt-12 text-left hidden">
-        <h2 class="text-lg font-bold mb-4 text-center">Or try one of these popular tools</h2>
-        <div id="suggestions" class="grid grid-cols-1 sm:grid-cols-2 gap-3"></div>
-      </div>
-    </section>
+  document.getElementById('year').textContent = new Date().getFullYear();
 
-    <!-- ================= TOOL VIEW ================= -->
-    <div id="tool-view" class="hidden">
+  /* ---------- theme ---------- */
+  var root = document.documentElement;
+  function syncIcon() {
+    var dark = root.classList.contains('dark');
+    $('#themeIcon').className = 'fa-solid ' + (dark ? 'fa-sun' : 'fa-moon');
+    $('#themeBtn').setAttribute('aria-pressed', dark);
+  }
+  $('#themeBtn').addEventListener('click', function () {
+    var dark = root.classList.toggle('dark');
+    try { localStorage.setItem('theme', dark ? 'dark' : 'light'); } catch (e) {}
+    syncIcon();
+  });
+  syncIcon();
 
-      <!-- Breadcrumbs -->
-      <nav aria-label="Breadcrumb" class="text-sm text-slate-500 dark:text-slate-400 mb-4">
-        <ol class="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <li><a href="index.html" class="hover:text-indigo-600 dark:hover:text-indigo-400 transition">Home</a></li>
-          <li aria-hidden="true"><i class="fa-solid fa-chevron-right text-[10px]"></i></li>
-          <li><a id="crumb-category" href="index.html" class="hover:text-indigo-600 dark:hover:text-indigo-400 transition"></a></li>
-          <li aria-hidden="true"><i class="fa-solid fa-chevron-right text-[10px]"></i></li>
-          <li id="crumb-tool" aria-current="page" class="font-medium text-slate-700 dark:text-slate-200"></li>
-        </ol>
-      </nav>
-
-      <!-- Title -->
-      <header class="flex items-start gap-4 mb-8">
-        <span class="flex-shrink-0 w-14 h-14 rounded-xl bg-indigo-600 text-white flex items-center justify-center text-2xl shadow-sm">
-          <i id="tool-icon" aria-hidden="true"></i>
-        </span>
-        <div>
-          <h1 id="tool-title" class="text-2xl sm:text-4xl font-extrabold tracking-tight"></h1>
-          <p id="tool-desc" class="mt-2 text-slate-600 dark:text-slate-400"></p>
-        </div>
-      </header>
-
-      <!-- AdSense Slot (Top) -->
-      <div id="ad-slot-top" class="mb-8 flex items-center justify-center min-h-[90px] rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-600 bg-slate-100/60 dark:bg-slate-800/40 text-xs uppercase tracking-wider text-slate-400 dark:text-slate-500" aria-label="Advertisement">
-        <!-- Paste your AdSense <ins class="adsbygoogle"> code here -->
-        Advertisement
-      </div>
-
-      <!-- Tool card -->
-      <section class="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-sm p-4 sm:p-6" aria-label="Tool workspace">
-        <form id="tool-form" novalidate autocomplete="off">
-          <div id="fields" class="grid grid-cols-1 sm:grid-cols-2 gap-4"></div>
-
-          <div class="mt-6 flex flex-wrap items-center gap-3">
-            <button id="run-btn" type="submit" class="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-offset-slate-800 transition">
-              <i class="fa-solid fa-play text-xs" aria-hidden="true"></i>
-              <span id="run-label">Run</span>
-            </button>
-            <button id="reset-btn" type="button" class="inline-flex items-center gap-2 px-5 py-3 rounded-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 font-medium hover:bg-slate-100 dark:hover:bg-slate-700 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-slate-400 dark:focus-visible:ring-offset-slate-800 transition">
-              <i class="fa-solid fa-rotate-left text-xs" aria-hidden="true"></i>
-              Clear / Reset
-            </button>
-          </div>
-        </form>
-
-        <!-- Error -->
-        <div id="error-box" role="alert" class="hidden mt-6 rounded-xl border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/40 text-red-800 dark:text-red-200 p-4 text-sm">
-          <i class="fa-solid fa-circle-exclamation mr-2" aria-hidden="true"></i><span id="error-text"></span>
-        </div>
-
-        <!-- Result -->
-        <div id="result-box" class="hidden mt-6 pt-6 border-t border-slate-200 dark:border-slate-700">
-          <div class="flex items-center justify-between gap-3 mb-3">
-            <h2 class="text-lg font-bold">Result</h2>
-            <div class="relative">
-              <span id="copy-tooltip" role="status" class="pointer-events-none absolute -top-10 left-1/2 -translate-x-1/2 translate-y-1 opacity-0 whitespace-nowrap rounded-md bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold px-3 py-1.5 shadow-lg">
-                <span id="copy-tooltip-text">Copied!</span>
-                <span class="absolute left-1/2 -bottom-1 -translate-x-1/2 w-2 h-2 rotate-45 bg-slate-900 dark:bg-slate-100"></span>
-              </span>
-              <button id="copy-btn" type="button" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-emerald-500 dark:focus-visible:ring-offset-slate-800 transition">
-                <i class="fa-regular fa-copy" aria-hidden="true"></i> Copy Result
-              </button>
-            </div>
-          </div>
-          <div id="result-text" class="hidden"></div>
-          <div id="result-stats" class="hidden grid grid-cols-1 sm:grid-cols-2 gap-3"></div>
-          <p id="result-note" class="hidden mt-3 text-xs text-slate-500 dark:text-slate-400"></p>
-        </div>
-      </section>
-
-      <!-- AdSense Slot (Bottom) -->
-      <div id="ad-slot-bottom" class="mt-8 flex items-center justify-center min-h-[90px] rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-600 bg-slate-100/60 dark:bg-slate-800/40 text-xs uppercase tracking-wider text-slate-400 dark:text-slate-500" aria-label="Advertisement">
-        <!-- Paste your AdSense <ins class="adsbygoogle"> code here -->
-        Advertisement
-      </div>
-
-      <!-- SEO content -->
-      <section class="mt-12" aria-label="About this tool">
-        <h2 id="about-heading" class="text-2xl font-bold mb-3"></h2>
-        <p id="about-text" class="text-slate-600 dark:text-slate-400"></p>
-
-        <h2 class="text-2xl font-bold mt-10 mb-4">Frequently Asked Questions</h2>
-        <div id="faq-list" class="space-y-3"></div>
-      </section>
-
-      <!-- Related tools -->
-      <section id="related-wrap" class="mt-12 hidden" aria-label="Related tools">
-        <h2 class="text-2xl font-bold mb-4">More <span id="related-category"></span></h2>
-        <div id="related-list" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
-      </section>
-    </div>
-  </main>
-
-  <!-- Footer -->
-  <footer class="border-t border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
-    <div class="max-w-5xl mx-auto px-4 sm:px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-sm text-slate-500 dark:text-slate-400">
-      <p>&copy; <span id="year">2026</span> QuickToolHub. All rights reserved.</p>
-      <nav class="flex items-center gap-5" aria-label="Footer navigation">
-        <a href="index.html" class="hover:text-indigo-600 dark:hover:text-indigo-400 transition">Home</a>
-        <a href="index.html" class="hover:text-indigo-600 dark:hover:text-indigo-400 transition">All Tools</a>
-      </nav>
-    </div>
-  </footer>
-
-  <script>
-    (function () {
-      'use strict';
-
-      var $ = function (id) { return document.getElementById(id); };
-
-      /* =====================================================================
-       * Dark mode
-       * =================================================================== */
-      $('theme-toggle').addEventListener('click', function () {
-        var isDark = document.documentElement.classList.toggle('dark');
-        try { localStorage.setItem('theme', isDark ? 'dark' : 'light'); } catch (e) {}
+  /* ---------- data access ---------- */
+  function rawTools() {
+    try { if (typeof window.ALL_TOOLS !== 'undefined' && window.ALL_TOOLS) return window.ALL_TOOLS; } catch (e) {}
+    try { if (typeof ALL_TOOLS !== 'undefined' && ALL_TOOLS) return ALL_TOOLS; } catch (e) {}
+    return null;
+  }
+  function toolList() {
+    var r = rawTools();
+    if (!r) return [];
+    if (Array.isArray(r)) return r.filter(function (t) { return t && typeof t === 'object'; });
+    if (typeof r === 'object') {
+      return Object.keys(r).filter(function (k) { return r[k] && typeof r[k] === 'object'; }).map(function (k) {
+        if (!r[k].slug && !r[k].id) r[k].slug = k;
+        return r[k];
       });
-      $('year').textContent = new Date().getFullYear();
-
-      /* =====================================================================
-       * Resolve the requested tool from the URL (?tool=slug, ?id=slug also works)
-       * =================================================================== */
-      var params = new URLSearchParams(window.location.search);
-      var slug = (params.get('tool') || params.get('id') || '').trim().toLowerCase();
-      var registryLoaded = typeof ALL_TOOLS !== 'undefined' && Array.isArray(ALL_TOOLS);
-      var tool = registryLoaded ? ALL_TOOLS.find(function (t) { return t.id === slug; }) : null;
-
-      /* =====================================================================
-       * SEO helpers
-       * =================================================================== */
-      function setMeta(id, attr, value) {
-        var el = $(id);
-        if (el) el.setAttribute(attr, value);
+    }
+    return [];
+  }
+  function findTool(list, slug) {
+    var s = String(slug || '').toLowerCase().trim();
+    if (!s) return null;
+    for (var i = 0; i < list.length; i++) {
+      var t = list[i];
+      var keys = [t.slug, t.id, t.name, slugify(t.title), slugify(t.name)];
+      for (var j = 0; j < keys.length; j++) {
+        if (keys[j] != null && String(keys[j]).toLowerCase() === s) return t;
       }
+    }
+    return null;
+  }
+  var toolTitle = function (t) { return t.title || t.name || 'Untitled Tool'; };
+  var toolDesc = function (t) { return t.desc || t.description || ''; };
+  var toolCat = function (t) {
+    var c = t.category;
+    if (c && typeof c === 'object') c = c.name || c.title || c.label;
+    return c ? String(c) : '';
+  };
+  var toolSlug = function (t) { return t.slug || t.id || slugify(toolTitle(t)); };
 
-      function addJsonLd(obj) {
-        var s = document.createElement('script');
-        s.type = 'application/ld+json';
-        s.textContent = JSON.stringify(obj);
-        document.head.appendChild(s);
-      }
+  function setMeta(title, desc) {
+    document.title = title;
+    var m = $('meta[name="description"]');
+    if (!m) { m = document.createElement('meta'); m.name = 'description'; document.head.appendChild(m); }
+    m.setAttribute('content', desc);
+  }
 
-      function canonicalUrl(id) {
-        return window.location.origin + window.location.pathname + '?tool=' + encodeURIComponent(id);
-      }
+  /* ---------- 404 / error state ---------- */
+  function renderNotFound(loadFailed) {
+    setMeta('Tool Not Found | QuickToolHub', 'The requested tool could not be found. Search QuickToolHub for free online tools.');
+    app.innerHTML =
+      '<section class="text-center py-12">' +
+        '<div class="mx-auto w-16 h-16 rounded-2xl bg-slate-200 dark:bg-slate-800 flex items-center justify-center text-2xl text-slate-500 mb-5"><i class="fa-solid ' + (loadFailed ? 'fa-plug-circle-exclamation' : 'fa-magnifying-glass') + '" aria-hidden="true"></i></div>' +
+        '<h1 class="text-3xl font-bold tracking-tight mb-2">' + (loadFailed ? 'Tools could not be loaded' : 'We couldn’t find that tool') + '</h1>' +
+        '<p class="text-slate-600 dark:text-slate-400 max-w-md mx-auto mb-7">' +
+          (loadFailed ? 'The tools library failed to load. Refresh the page, or head back home and try again.' : 'The link may be outdated or mistyped. Search for what you need below.') + '</p>' +
+        '<form id="nfForm" class="max-w-md mx-auto flex gap-2" role="search">' +
+          '<label for="nfQ" class="sr-only">Search tools</label>' +
+          '<input id="nfQ" type="search" autocomplete="off" placeholder="Search tools…" class="' + FIELD + '">' +
+          '<button type="submit" class="' + BTN + ' bg-teal-700 hover:bg-teal-800 text-white shrink-0">Search</button>' +
+        '</form>' +
+        '<ul id="nfList" class="max-w-md mx-auto mt-3 text-left divide-y divide-slate-200 dark:divide-slate-800"></ul>' +
+        '<a href="index.html" class="' + BTN + ' mt-8 border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-house" aria-hidden="true"></i>Back to all tools</a>' +
+      '</section>';
 
-      /* =====================================================================
-       * 404 state
-       * =================================================================== */
-      function showNotFound() {
-        document.title = 'Tool Not Found - QuickToolHub';
-        setMeta('meta-robots', 'content', 'noindex, follow');
-        setMeta('og-title', 'content', 'Tool Not Found - QuickToolHub');
-        setMeta('tw-title', 'content', 'Tool Not Found - QuickToolHub');
+    var list = toolList(), q = $('#nfQ'), ul = $('#nfList');
+    q.addEventListener('input', function () {
+      var v = q.value.toLowerCase().trim();
+      if (!v) { ul.innerHTML = ''; return; }
+      var hits = list.filter(function (t) {
+        return (toolTitle(t) + ' ' + toolDesc(t) + ' ' + toolCat(t)).toLowerCase().indexOf(v) > -1;
+      }).slice(0, 6);
+      ul.innerHTML = hits.length ? hits.map(function (t) {
+        return '<li><a class="block px-2 py-2.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded" href="tool.html?tool=' + encodeURIComponent(toolSlug(t)) + '"><span class="font-medium">' + esc(toolTitle(t)) + '</span><span class="block text-xs text-slate-500 truncate">' + esc(toolDesc(t)) + '</span></a></li>';
+      }).join('') : '<li class="px-2 py-2.5 text-sm text-slate-500">No matching tools.</li>';
+    });
+    $('#nfForm').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var v = q.value.trim();
+      location.href = 'index.html' + (v ? '?q=' + encodeURIComponent(v) : '');
+    });
+    q.focus();
+  }
 
-        var msg = $('notfound-message');
-        if (!registryLoaded) {
-          msg.textContent = 'The tools library could not be loaded. Please check your connection and try again.';
-        } else if (slug) {
-          msg.textContent = 'We couldn\u2019t find a tool called \u201C' + slug + '\u201D. It may have been renamed or removed.';
-        } else {
-          msg.textContent = 'No tool was selected. Pick one from the home page to get started.';
+  /* ---------- input normalisation ---------- */
+  var GENERIC = ['text', 'email', 'url', 'password', 'tel', 'date', 'time', 'color', 'range', 'search', 'datetime-local', 'month', 'week'];
+  function normInput(inp, i) {
+    var o = typeof inp === 'string' ? { label: inp } : (inp && typeof inp === 'object' ? inp : {});
+    var type = String(o.type || 'text').toLowerCase();
+    if (type === 'dropdown') type = 'select';
+    if (type === 'bool' || type === 'boolean') type = 'checkbox';
+    if (type !== 'select' && type !== 'textarea' && type !== 'number' && type !== 'checkbox' && GENERIC.indexOf(type) < 0) type = 'text';
+    var id = String(o.id || o.name || o.key || '').trim() || ('input-' + i);
+    var opts = [];
+    if (type === 'select') {
+      opts = (Array.isArray(o.options) ? o.options : (Array.isArray(o.choices) ? o.choices : [])).map(function (x) {
+        if (x && typeof x === 'object') {
+          var v = x.value != null ? x.value : (x.id != null ? x.id : x.label);
+          return { value: v, label: x.label != null ? x.label : (x.text != null ? x.text : (x.name != null ? x.name : v)) };
         }
-
-        if (registryLoaded && ALL_TOOLS.length) {
-          var box = $('suggestions');
-          ALL_TOOLS.slice(0, 6).forEach(function (t) { box.appendChild(toolCard(t)); });
-          $('suggestions-wrap').classList.remove('hidden');
-        }
-        $('state-404').classList.remove('hidden');
-      }
-
-      function toolCard(t) {
-        var a = document.createElement('a');
-        a.href = 'tool.html?tool=' + encodeURIComponent(t.id);
-        a.className = 'flex items-center gap-3 p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-indigo-400 dark:hover:border-indigo-500 hover:shadow-sm transition';
-        var iconWrap = document.createElement('span');
-        iconWrap.className = 'flex-shrink-0 w-10 h-10 rounded-lg bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-300 flex items-center justify-center';
-        var i = document.createElement('i');
-        i.className = t.icon;
-        i.setAttribute('aria-hidden', 'true');
-        iconWrap.appendChild(i);
-        var title = document.createElement('span');
-        title.className = 'font-semibold text-sm';
-        title.textContent = t.title;
-        a.appendChild(iconWrap);
-        a.appendChild(title);
-        return a;
-      }
-
-      if (!tool) {
-        showNotFound();
-        return;
-      }
-
-      /* =====================================================================
-       * Tool page: header, breadcrumbs, SEO
-       * =================================================================== */
-      var pageTitle = 'Free Online ' + tool.title + ' - QuickToolHub';
-      var metaDesc = tool.desc + ' Free, fast and private: it runs entirely in your browser.';
-      var pageUrl = canonicalUrl(tool.id);
-      var category = (typeof TOOL_CATEGORIES !== 'undefined' ? TOOL_CATEGORIES : []).find(function (c) { return c.name === tool.category; });
-
-      document.title = pageTitle;
-      setMeta('meta-description', 'content', metaDesc);
-      setMeta('link-canonical', 'href', pageUrl);
-      setMeta('og-title', 'content', pageTitle);
-      setMeta('og-description', 'content', metaDesc);
-      setMeta('og-url', 'content', pageUrl);
-      setMeta('tw-title', 'content', pageTitle);
-      setMeta('tw-description', 'content', metaDesc);
-
-      $('tool-icon').className = tool.icon;
-      $('tool-title').textContent = tool.title;
-      $('tool-desc').textContent = tool.desc;
-      $('crumb-tool').textContent = tool.title;
-      $('crumb-category').textContent = tool.category;
-      $('crumb-category').href = 'index.html' + (category ? '?category=' + encodeURIComponent(category.slug) : '');
-      $('run-label').textContent = tool.actionText || 'Run';
-
-      /* =====================================================================
-       * Render input fields
-       * =================================================================== */
-      var FIELD_CLASS = 'w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition';
-      var fieldEls = [];
-
-      function buildField(input) {
-        var type = input.type || 'text';
-        var fid = 'f-' + input.id;
-
-        var wrap = document.createElement('div');
-        if (type === 'textarea' || type === 'text') wrap.className = 'sm:col-span-2';
-
-        var label = document.createElement('label');
-        label.htmlFor = fid;
-        label.className = 'block text-sm font-semibold mb-1.5 text-slate-700 dark:text-slate-200';
-        label.textContent = input.label || input.id;
-        if (input.required) {
-          var star = document.createElement('span');
-          star.className = 'text-red-500';
-          star.textContent = ' *';
-          label.appendChild(star);
-        }
-        wrap.appendChild(label);
-
-        var el;
-        if (type === 'textarea') {
-          el = document.createElement('textarea');
-          el.rows = input.rows || 6;
-          el.spellcheck = false;
-          el.className = FIELD_CLASS + ' resize-y leading-relaxed';
-        } else if (type === 'select') {
-          el = document.createElement('select');
-          el.className = FIELD_CLASS;
-          (input.options || []).forEach(function (opt) {
-            var o = document.createElement('option');
-            o.value = opt.value;
-            o.textContent = opt.label;
-            el.appendChild(o);
-          });
-        } else {
-          el = document.createElement('input');
-          el.type = (type === 'number' || type === 'date') ? type : 'text';
-          el.className = FIELD_CLASS;
-          if (type === 'number') {
-            el.step = input.step !== undefined ? String(input.step) : 'any';
-            if (input.min !== undefined) el.min = input.min;
-            if (input.max !== undefined) el.max = input.max;
-            el.inputMode = 'decimal';
-          }
-        }
-        el.id = fid;
-        el.name = input.id;
-        if (input.placeholder && type !== 'select') el.placeholder = input.placeholder;
-
-        var def = input.default !== undefined && input.default !== null ? String(input.default) : '';
-        if (type === 'select') {
-          if (def !== '') el.value = def; else el.selectedIndex = 0;
-        } else {
-          el.value = def;
-        }
-
-        wrap.appendChild(el);
-
-        if (input.help) {
-          var help = document.createElement('p');
-          help.className = 'mt-1.5 text-xs text-slate-500 dark:text-slate-400';
-          help.textContent = input.help;
-          wrap.appendChild(help);
-        }
-
-        // Keyboard shortcuts: Enter runs single-line fields, Ctrl/Cmd+Enter runs textareas.
-        if (type === 'textarea') {
-          el.addEventListener('keydown', function (e) {
-            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); runTool(); }
-          });
-        } else if (type !== 'select') {
-          el.addEventListener('keydown', function (e) {
-            if (e.key === 'Enter') { e.preventDefault(); runTool(); }
-          });
-        }
-
-        fieldEls.push({ input: input, el: el, def: def, type: type });
-        return wrap;
-      }
-
-      var fieldsWrap = $('fields');
-      (tool.inputs || []).forEach(function (inp) { fieldsWrap.appendChild(buildField(inp)); });
-
-      /* =====================================================================
-       * Run / render result
-       * =================================================================== */
-      var errorBox = $('error-box');
-      var resultBox = $('result-box');
-      var resultText = $('result-text');
-      var resultStats = $('result-stats');
-      var resultNote = $('result-note');
-      var lastCopyText = '';
-
-      function collectValues() {
-        var values = {};
-        fieldEls.forEach(function (f) { values[f.input.id] = f.el.value; });
-        return values;
-      }
-
-      function showError(message) {
-        $('error-text').textContent = message || 'Something went wrong. Please check your input and try again.';
-        errorBox.classList.remove('hidden');
-        resultBox.classList.add('hidden');
-        lastCopyText = '';
-      }
-
-      function clearOutput() {
-        errorBox.classList.add('hidden');
-        resultBox.classList.add('hidden');
-        resultText.textContent = '';
-        resultStats.textContent = '';
-        resultNote.textContent = '';
-        lastCopyText = '';
-      }
-
-      function renderResult(res) {
-        var text = res.text !== undefined && res.text !== null ? String(res.text) : '';
-        var stats = Array.isArray(res.stats) ? res.stats : [];
-        var note = res.note ? String(res.note) : '';
-
-        // Main text block
-        resultText.textContent = text;
-        if (text !== '') {
-          var headline = stats.length > 0 && text.indexOf('\n') === -1;
-          resultText.className = headline
-            ? 'text-xl sm:text-2xl font-bold text-indigo-600 dark:text-indigo-300 break-words mb-4'
-            : 'whitespace-pre-wrap break-words font-mono text-sm leading-relaxed rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 p-4 max-h-96 overflow-auto mb-4';
-        } else {
-          resultText.className = 'hidden';
-        }
-
-        // Stats grid
-        resultStats.textContent = '';
-        if (stats.length) {
-          stats.forEach(function (s) {
-            var card = document.createElement('div');
-            card.className = 'rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 p-3';
-            var l = document.createElement('div');
-            l.className = 'text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400';
-            l.textContent = s.label;
-            var v = document.createElement('div');
-            v.className = 'mt-1 font-semibold break-words';
-            v.textContent = s.value;
-            card.appendChild(l);
-            card.appendChild(v);
-            resultStats.appendChild(card);
-          });
-          resultStats.classList.remove('hidden');
-        } else {
-          resultStats.classList.add('hidden');
-        }
-
-        // Note
-        if (note) {
-          resultNote.textContent = note;
-          resultNote.classList.remove('hidden');
-        } else {
-          resultNote.classList.add('hidden');
-        }
-
-        // What "Copy Result" copies: the main text, or the stats as lines if there is no text.
-        lastCopyText = text !== ''
-          ? text
-          : stats.map(function (s) { return s.label + ': ' + s.value; }).join('\n');
-
-        errorBox.classList.add('hidden');
-        resultBox.classList.remove('hidden');
-        resultBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      }
-
-      function runTool() {
-        var res;
-        try {
-          res = tool.execute(collectValues());
-        } catch (err) {
-          showError(err && err.message);
-          errorBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-          return;
-        }
-        if (res === undefined || res === null) {
-          showError('The tool did not return a result.');
-          return;
-        }
-        if (typeof res !== 'object') res = { text: String(res) };
-        renderResult(res);
-      }
-
-      $('tool-form').addEventListener('submit', function (e) {
-        e.preventDefault();
-        runTool();
+        return { value: x, label: x };
       });
+    }
+    var aliases = [];
+    [id, o.id, o.name, o.key, o.label].forEach(function (a) {
+      if (typeof a === 'string' && a && aliases.indexOf(a) < 0) aliases.push(a);
+    });
+    return {
+      raw: o, i: i, id: id, uid: 'f-' + i, type: type, opts: opts, aliases: aliases,
+      label: o.label || o.title || o.placeholder || ('Input ' + (i + 1)),
+      placeholder: o.placeholder || '',
+      def: o.default != null ? o.default : (o.value != null ? o.value : ''),
+      help: o.help || o.hint || ''
+    };
+  }
 
-      /* =====================================================================
-       * Reset
-       * =================================================================== */
-      $('reset-btn').addEventListener('click', function () {
-        fieldEls.forEach(function (f) {
-          if (f.type === 'select' && f.def === '') f.el.selectedIndex = 0;
-          else f.el.value = f.def;
-        });
-        clearOutput();
-        if (fieldEls.length) fieldEls[0].el.focus();
-      });
+  function fieldHTML(f) {
+    var o = f.raw, a = '', label = esc(f.label);
+    var req = o.required ? ' required' : '';
+    var common = ' id="' + f.uid + '" name="' + esc(f.id) + '"' + req;
+    var help = f.help ? '<p class="mt-1 text-xs text-slate-500">' + esc(f.help) + '</p>' : '';
+    var lbl = '<label for="' + f.uid + '" class="block text-sm font-semibold mb-1.5">' + label + (o.required ? ' <span class="text-red-600" aria-hidden="true">*</span>' : '') + '</label>';
+    var ph = f.placeholder ? ' placeholder="' + esc(f.placeholder) + '"' : '';
 
-      /* =====================================================================
-       * Copy result
-       * =================================================================== */
-      var tooltip = $('copy-tooltip');
-      var tooltipText = $('copy-tooltip-text');
-      var tooltipTimer = null;
+    if (f.type === 'textarea') {
+      return '<div>' + lbl + '<textarea' + common + ' rows="' + (parseInt(o.rows, 10) || 5) + '" class="' + FIELD + ' min-h-[8rem] font-[inherit]"' + ph + ' data-auto>' + esc(f.def) + '</textarea>' + help + '</div>';
+    }
+    if (f.type === 'select') {
+      var opts = f.opts.map(function (x) {
+        var sel = (f.def !== '' && String(x.value) === String(f.def)) ? ' selected' : '';
+        return '<option value="' + esc(x.value) + '"' + sel + '>' + esc(x.label) + '</option>';
+      }).join('');
+      return '<div>' + lbl + '<select' + common + ' class="' + FIELD + '">' + opts + '</select>' + help + '</div>';
+    }
+    if (f.type === 'checkbox') {
+      return '<div class="flex items-center gap-2"><input type="checkbox"' + common + (f.def === true || f.def === 'true' ? ' checked' : '') + ' class="w-4 h-4 accent-teal-700"><label for="' + f.uid + '" class="text-sm font-semibold">' + label + '</label></div>' + help;
+    }
+    if (f.type === 'number') {
+      ['min', 'max'].forEach(function (k) { if (o[k] != null) a += ' ' + k + '="' + esc(o[k]) + '"'; });
+      a += ' step="' + esc(o.step != null ? o.step : 'any') + '"';
+      return '<div>' + lbl + '<input type="number" inputmode="decimal"' + common + a + ' value="' + esc(f.def) + '" class="' + FIELD + '"' + ph + '>' + help + '</div>';
+    }
+    ['min', 'max', 'step', 'maxlength', 'pattern'].forEach(function (k) { if (o[k] != null) a += ' ' + k + '="' + esc(o[k]) + '"'; });
+    return '<div>' + lbl + '<input type="' + f.type + '"' + common + a + ' value="' + esc(f.def) + '" class="' + FIELD + '"' + ph + ' autocomplete="off">' + help + '</div>';
+  }
 
-      function showTooltip(message) {
-        tooltipText.textContent = message;
-        tooltip.style.opacity = '1';
-        tooltip.style.transform = 'translate(-50%, 0)';
-        clearTimeout(tooltipTimer);
-        tooltipTimer = setTimeout(function () {
-          tooltip.style.opacity = '0';
-          tooltip.style.transform = 'translate(-50%, 4px)';
-        }, 1500);
+  /* ---------- self-healing execution engine ---------- */
+  var BUILTIN = /^(trim|trimStart|trimEnd|split|length|toString|toUpperCase|toLowerCase|replace|replaceAll|match|matchAll|slice|substring|substr|indexOf|lastIndexOf|includes|startsWith|endsWith|charAt|charCodeAt|codePointAt|padStart|padEnd|repeat|normalize|localeCompare|concat|search|toFixed|toPrecision|valueOf|at|map|forEach|filter|reduce|join|push|pop|some|every|find|sort|reverse)$/;
+  var ARRAYISH = /^(map|forEach|filter|reduce|join|push|pop|some|every|find|sort|reverse)$/;
+
+  function detectStyle(fn, inputs) {
+    var src;
+    try { src = Function.prototype.toString.call(fn); } catch (e) { return null; }
+    var first = '', m = src.match(/^\s*(?:async\s+)?([\w$]+)\s*=>/);
+    if (m) first = m[1];
+    else {
+      m = src.match(/^\s*(?:async\s+)?(?:function\*?\s*[\w$]*|[\w$]+)?\s*\(([\s\S]*?)\)\s*(?:=>|\{)/);
+      if (m) first = m[1].trim();
+    }
+    if (fn.length > 1 && inputs.length > 1) return 'spread';
+    if (!first) return null;
+    if (first.charAt(0) === '{') return 'object';
+    if (first.charAt(0) === '[') return 'array';
+    var n = first.split(/[=,\s]/)[0].replace(/^\.\.\./, '');
+    if (!n) return null;
+    var ne = n.replace(/[$]/g, '\\$');
+    var ids = {};
+    inputs.forEach(function (f) { f.aliases.forEach(function (a) { ids[a] = 1; }); });
+    var re = new RegExp('(?:^|[^\\w$.])' + ne + '\\s*\\.\\s*([A-Za-z_$][\\w$]*)', 'g'), mm, members = [];
+    while ((mm = re.exec(src))) members.push(mm[1]);
+    if (members.some(function (x) { return ids[x]; })) return 'object';
+    if (new RegExp('(?:^|[^\\w$.])' + ne + '\\s*\\[\\s*[\'"`]').test(src)) return 'object';
+    if (new RegExp('(?:^|[^\\w$.])' + ne + '\\s*\\[\\s*\\d').test(src) || members.some(function (x) { return ARRAYISH.test(x); })) {
+      return inputs.length === 1 && !members.some(function (x) { return ARRAYISH.test(x); }) ? 'array' : 'array';
+    }
+    if (members.some(function (x) { return !BUILTIN.test(x); })) return 'object';
+    return inputs.length <= 1 ? 'primitive' : 'object';
+  }
+
+  function hide(o, k, v) {
+    try { Object.defineProperty(o, k, { value: v, enumerable: false, configurable: true, writable: true }); } catch (e) {}
+  }
+  function buildArgs(mode, inputs, vals) {
+    var i;
+    if (mode === 'primitive') return [vals[0]];
+    if (mode === 'spread') return vals.slice();
+    if (mode === 'array') {
+      var arr = vals.slice();
+      inputs.forEach(function (f, idx) { f.aliases.forEach(function (a) { hide(arr, a, vals[idx]); }); });
+      return [arr];
+    }
+    var obj = {};
+    inputs.forEach(function (f, idx) { obj[f.id] = vals[idx]; });
+    inputs.forEach(function (f, idx) { f.aliases.forEach(function (a) { if (!(a in obj)) hide(obj, a, vals[idx]); }); });
+    for (i = 0; i < vals.length; i++) hide(obj, String(i), vals[i]);
+    hide(obj, 'length', vals.length);
+    if (typeof Symbol !== 'undefined' && Symbol.iterator) hide(obj, Symbol.iterator, function () { return vals[Symbol.iterator](); });
+    return [obj];
+  }
+  function readValues(inputs) {
+    return inputs.map(function (f) {
+      var el = document.getElementById(f.uid);
+      if (!el) return '';
+      if (f.type === 'checkbox') return el.checked;
+      if (f.type === 'select') { var op = f.opts[el.selectedIndex]; return op ? op.value : el.value; }
+      if (f.type === 'number') { var s = el.value.trim(); return s === '' ? '' : Number(s); }
+      return el.value;
+    });
+  }
+  async function execute(tool, inputs, vals) {
+    var fn = [tool.execute, tool.run, tool.calculate, tool.process, tool.handler].filter(function (x) { return typeof x === 'function'; })[0];
+    if (!fn) throw new Error('This tool does not have an execute() function yet.');
+    var det = detectStyle(fn, inputs);
+    var order = [det].concat(['object', 'array', 'primitive', 'spread']).filter(function (m, i, a) { return m && a.indexOf(m) === i; })
+      .filter(function (m) { return m !== 'primitive' || vals.length <= 1; })
+      .filter(function (m) { return m !== 'spread' || vals.length > 1; });
+    var firstErr = null;
+    for (var k = 0; k < order.length; k++) {
+      try {
+        var r = await fn.apply(tool, buildArgs(order[k], inputs, vals));
+        if (r !== undefined && r !== null) return r;
+      } catch (e) { if (!firstErr) firstErr = e; }
+    }
+    if (firstErr) throw firstErr;
+    return '';
+  }
+  function format(r) {
+    if (r && typeof r === 'object' && !Array.isArray(r)) {
+      if (r.html != null) return { html: true, v: String(r.html) };
+      var ks = ['result', 'output', 'value', 'text'];
+      for (var i = 0; i < ks.length; i++) if (ks[i] in r) return format(r[ks[i]]);
+      return { html: false, v: JSON.stringify(r, null, 2) };
+    }
+    if (Array.isArray(r)) {
+      var flat = r.every(function (x) { return x === null || typeof x !== 'object'; });
+      return { html: false, v: flat ? r.join('\n') : JSON.stringify(r, null, 2) };
+    }
+    var s = String(r);
+    return { html: looksHTML(s), v: s };
+  }
+
+  /* ---------- SEO content ---------- */
+  function para(s) {
+    s = String(s == null ? '' : s);
+    return looksHTML(s) ? clean(s) : s.split(/\n{2,}/).map(function (p) { return '<p>' + esc(p).replace(/\n/g, '<br>') + '</p>'; }).join('');
+  }
+  function contentHTML(c) {
+    if (!c) return '';
+    if (Array.isArray(c)) {
+      return c.map(function (x) {
+        if (x && typeof x === 'object') return '<h3>' + esc(x.title || x.heading || '') + '</h3>' + para(x.body || x.text || x.content || '');
+        return para(x);
+      }).join('');
+    }
+    if (typeof c === 'object') return Object.keys(c).map(function (k) { return '<h3>' + esc(k) + '</h3>' + para(c[k]); }).join('');
+    return para(c);
+  }
+  function normFaqs(f) {
+    if (!f) return [];
+    if (!Array.isArray(f) && typeof f === 'object') f = Object.keys(f).map(function (k) { return { q: k, a: f[k] }; });
+    if (!Array.isArray(f)) return [];
+    return f.map(function (x) {
+      return { q: x.q || x.question || x.title || '', a: x.a || x.answer || x.text || '' };
+    }).filter(function (x) { return x.q && x.a; });
+  }
+
+  /* ---------- tool renderer ---------- */
+  function renderTool(tool) {
+    var title = toolTitle(tool), desc = toolDesc(tool), cat = toolCat(tool);
+    setMeta(title + ' - Free Online Tool | QuickToolHub', desc || (title + ' - free online tool by QuickToolHub.'));
+    var inputs = (Array.isArray(tool.inputs) ? tool.inputs : []).map(normInput);
+    var faqs = normFaqs(tool.faqs || tool.faq);
+    var guide = contentHTML(tool.content || tool.guide || tool.howTo);
+
+    var crumbs = '<li><a class="hover:text-teal-700 dark:hover:text-teal-400" href="index.html">Home</a></li>' +
+      (cat ? '<li aria-hidden="true"><i class="fa-solid fa-chevron-right text-[10px]"></i></li><li><a class="hover:text-teal-700 dark:hover:text-teal-400" href="index.html?category=' + encodeURIComponent(cat) + '">' + esc(cat) + '</a></li>' : '') +
+      '<li aria-hidden="true"><i class="fa-solid fa-chevron-right text-[10px]"></i></li><li class="text-slate-800 dark:text-slate-200 font-medium truncate" aria-current="page">' + esc(title) + '</li>';
+
+    var icon = tool.icon && /^[\w\- ]+$/.test(tool.icon) ? '<i class="' + esc(tool.icon) + ' mr-2" aria-hidden="true"></i>' : '';
+
+    var html =
+      '<nav aria-label="Breadcrumb" class="mb-5"><ol class="flex flex-wrap items-center gap-2 text-sm text-slate-500 dark:text-slate-400">' + crumbs + '</ol></nav>' +
+      '<header class="mb-6">' +
+        (cat ? '<span class="inline-flex items-center rounded-full bg-teal-100 text-teal-800 dark:bg-teal-900/50 dark:text-teal-300 px-3 py-1 text-xs font-semibold mb-3">' + icon + esc(cat) + '</span>' : '') +
+        '<h1 class="text-3xl sm:text-4xl font-bold tracking-tight">' + esc(title) + '</h1>' +
+        (desc ? '<p class="mt-3 text-lg text-slate-600 dark:text-slate-400 leading-relaxed">' + esc(desc) + '</p>' : '') +
+      '</header>' +
+      '<section aria-label="' + esc(title) + ' workspace" class="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 sm:p-7 shadow-sm">' +
+        '<form id="toolForm" novalidate class="space-y-5">' +
+          inputs.map(fieldHTML).join('') +
+          '<div class="flex flex-wrap gap-3 pt-1">' +
+            '<button type="submit" id="runBtn" class="' + BTN + ' bg-teal-700 hover:bg-teal-800 text-white"><i class="fa-solid fa-play text-xs" aria-hidden="true"></i><span>' + esc(tool.buttonText || tool.cta || 'Run Tool') + '</span></button>' +
+            '<button type="button" id="resetBtn" class="' + BTN + ' border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"><i class="fa-solid fa-rotate-left text-xs" aria-hidden="true"></i>Clear / Reset</button>' +
+          '</div>' +
+        '</form>' +
+        '<div id="alertBox" role="alert" class="hidden mt-5 rounded-lg border border-red-300 dark:border-red-900 bg-red-50 dark:bg-red-950/50 text-red-800 dark:text-red-300 px-4 py-3 text-sm"></div>' +
+        '<div id="resultWrap" class="hidden mt-6">' +
+          '<div class="flex items-center justify-between mb-2">' +
+            '<h2 class="text-sm font-semibold text-slate-500 dark:text-slate-400">Result</h2>' +
+            '<button type="button" id="copyBtn" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-semibold hover:bg-slate-100 dark:hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"><i class="fa-regular fa-copy" aria-hidden="true"></i><span>Copy Result</span></button>' +
+          '</div>' +
+          '<div id="result" aria-live="polite" class="result-box rounded-xl border-l-4 border-teal-600 bg-slate-100 dark:bg-slate-800/70 px-5 py-4 text-xl sm:text-2xl leading-relaxed min-h-[5rem] whitespace-pre-wrap"></div>' +
+        '</div>' +
+      '</section>';
+
+    if (guide) html += '<article class="prose prose-slate dark:prose-invert max-w-none mt-10 prose-headings:tracking-tight"><h2>How to use ' + esc(title) + '</h2>' + guide + '</article>';
+    if (faqs.length) {
+      html += '<section class="mt-10" aria-labelledby="faqH"><h2 id="faqH" class="text-2xl font-bold tracking-tight mb-4">Frequently asked questions</h2><div class="space-y-3">' +
+        faqs.map(function (f) {
+          return '<details class="group rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">' +
+            '<summary class="flex items-center justify-between gap-4 cursor-pointer px-5 py-4 font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-600 rounded-xl">' + esc(f.q) + '<i class="fa-solid fa-chevron-down text-xs text-slate-400 transition-transform group-open:rotate-180" aria-hidden="true"></i></summary>' +
+            '<div class="prose prose-slate dark:prose-invert max-w-none px-5 pb-4 -mt-1">' + para(f.a) + '</div></details>';
+        }).join('') + '</div></section>';
+    }
+    app.innerHTML = html;
+
+    if (faqs.length) {
+      try {
+        var ld = document.createElement('script');
+        ld.type = 'application/ld+json';
+        ld.textContent = JSON.stringify({ '@context': 'https://schema.org', '@type': 'FAQPage', mainEntity: faqs.map(function (f) {
+          return { '@type': 'Question', name: f.q, acceptedAnswer: { '@type': 'Answer', text: String(f.a).replace(/<[^>]+>/g, '') } };
+        }) });
+        document.head.appendChild(ld);
+      } catch (e) {}
+    }
+
+    /* wiring */
+    var form = $('#toolForm'), alertBox = $('#alertBox'), wrap = $('#resultWrap'), out = $('#result'),
+        copyBtn = $('#copyBtn'), runBtn = $('#runBtn'), copyTimer;
+
+    function grow(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight + 2, 480) + 'px'; }
+    form.querySelectorAll('textarea[data-auto]').forEach(function (t) { t.addEventListener('input', function () { grow(t); }); grow(t); });
+
+    function showError(msg) {
+      alertBox.innerHTML = '<i class="fa-solid fa-triangle-exclamation mr-2" aria-hidden="true"></i>' + esc(msg);
+      alertBox.classList.remove('hidden');
+      wrap.classList.add('hidden');
+    }
+    function resetCopy() {
+      clearTimeout(copyTimer);
+      copyBtn.querySelector('span').textContent = 'Copy Result';
+      copyBtn.querySelector('i').className = 'fa-regular fa-copy';
+    }
+
+    async function run() {
+      alertBox.classList.add('hidden');
+      resetCopy();
+      runBtn.disabled = true;
+      try {
+        var res = await execute(tool, inputs, readValues(inputs));
+        var f = format(res);
+        if (f.v === '' || f.v === 'undefined') { showError('The tool returned no result. Check your input and try again.'); return; }
+        if (f.html) out.innerHTML = clean(f.v); else out.textContent = f.v;
+        out.style.whiteSpace = f.html ? 'normal' : 'pre-wrap';
+        wrap.classList.remove('hidden');
+        if (wrap.getBoundingClientRect().bottom > window.innerHeight) wrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } catch (err) {
+        console.error('[QuickToolHub] Tool error:', err);
+        showError('Something went wrong while running this tool' + (err && err.message ? ': ' + err.message : '.') + ' Please check your input and try again.');
+      } finally { runBtn.disabled = false; }
+    }
+
+    form.addEventListener('submit', function (e) { e.preventDefault(); run(); });
+    form.addEventListener('keydown', function (e) {
+      var t = e.target;
+      if (e.key !== 'Enter' || e.isComposing) return;
+      if (t.tagName === 'TEXTAREA' && !(e.ctrlKey || e.metaKey)) return;
+      if (t.tagName === 'SELECT' || t.tagName === 'BUTTON') return;
+      e.preventDefault(); run();
+    });
+
+    $('#resetBtn').addEventListener('click', function () {
+      form.reset();
+      form.querySelectorAll('textarea[data-auto]').forEach(grow);
+      out.textContent = '';
+      wrap.classList.add('hidden');
+      alertBox.classList.add('hidden');
+      resetCopy();
+      var firstField = form.querySelector('input:not([type=checkbox]), textarea, select');
+      if (firstField) firstField.focus();
+    });
+
+    copyBtn.addEventListener('click', function () {
+      var text = out.innerText || out.textContent || '';
+      function done() {
+        copyBtn.querySelector('span').textContent = 'Copied!';
+        copyBtn.querySelector('i').className = 'fa-solid fa-check text-teal-600';
+        clearTimeout(copyTimer);
+        copyTimer = setTimeout(resetCopy, 1800);
       }
-
-      function fallbackCopy(text) {
+      function fallback() {
         var ta = document.createElement('textarea');
-        ta.value = text;
-        ta.setAttribute('readonly', '');
-        ta.style.position = 'fixed';
-        ta.style.top = '-1000px';
-        document.body.appendChild(ta);
-        ta.select();
-        var ok = false;
-        try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+        ta.value = text; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
+        document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); done(); } catch (e) {}
         document.body.removeChild(ta);
-        return ok;
       }
+      if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, fallback);
+      else fallback();
+    });
 
-      $('copy-btn').addEventListener('click', function () {
-        if (!lastCopyText) { showTooltip('Nothing to copy'); return; }
-        if (navigator.clipboard && window.isSecureContext) {
-          navigator.clipboard.writeText(lastCopyText).then(function () {
-            showTooltip('Copied!');
-          }).catch(function () {
-            showTooltip(fallbackCopy(lastCopyText) ? 'Copied!' : 'Copy failed');
-          });
-        } else {
-          showTooltip(fallbackCopy(lastCopyText) ? 'Copied!' : 'Copy failed');
-        }
-      });
+    var firstInput = form.querySelector('input:not([type=checkbox]):not([type=color]), textarea');
+    if (firstInput && window.matchMedia('(min-width: 768px)').matches) firstInput.focus({ preventScroll: true });
+  }
 
-      /* =====================================================================
-       * Contextual SEO section + FAQs
-       * =================================================================== */
-      function joinList(items) {
-        if (items.length <= 1) return items.join('');
-        if (items.length === 2) return items[0] + ' and ' + items[1];
-        return items.slice(0, -1).join(', ') + ', and ' + items[items.length - 1];
-      }
-
-      var labels = (tool.inputs || []).map(function (i) { return '\u201C' + String(i.label || i.id).replace(/\s*\(.*?\)\s*/g, ' ').trim() + '\u201D'; });
-      var shownLabels = labels.length > 4 ? labels.slice(0, 4).concat(['the remaining options']) : labels;
-
-      var faqs = [
-        {
-          q: 'How do I use the ' + tool.title + '?',
-          a: 'Fill in ' + (shownLabels.length ? joinList(shownLabels) : 'the fields') + ' above, then click \u201C' + (tool.actionText || 'Run') +
-             '\u201D. Your result appears instantly below the button. You can copy it with one click, or press Clear / Reset to start over.'
-        },
-        {
-          q: 'Is the ' + tool.title + ' free and private?',
-          a: 'Yes. The ' + tool.title + ' is 100% free with no sign-up or limits. Everything is processed locally in your browser, so the data you enter is never uploaded to a server or stored.'
-        }
-      ];
-
-      $('about-heading').textContent = 'About the ' + tool.title;
-      $('about-text').textContent = tool.desc + ' This free ' + tool.category.toLowerCase() + ' tool by QuickToolHub works on any device and gives you results instantly.';
-
-      var faqList = $('faq-list');
-      faqs.forEach(function (f) {
-        var d = document.createElement('details');
-        d.className = 'group rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800';
-        var s = document.createElement('summary');
-        s.className = 'flex items-center justify-between gap-4 cursor-pointer select-none p-4 font-semibold';
-        var qt = document.createElement('span');
-        qt.textContent = f.q;
-        var chev = document.createElement('i');
-        chev.className = 'fa-solid fa-chevron-down faq-chevron text-sm transition-transform flex-shrink-0';
-        chev.setAttribute('aria-hidden', 'true');
-        s.appendChild(qt);
-        s.appendChild(chev);
-        var body = document.createElement('div');
-        body.className = 'px-4 pb-4 text-slate-600 dark:text-slate-400';
-        body.textContent = f.a;
-        d.appendChild(s);
-        d.appendChild(body);
-        faqList.appendChild(d);
-      });
-
-      /* =====================================================================
-       * Related tools (same category)
-       * =================================================================== */
-      var related = ALL_TOOLS.filter(function (t) { return t.category === tool.category && t.id !== tool.id; }).slice(0, 6);
-      if (related.length) {
-        $('related-category').textContent = tool.category;
-        var rl = $('related-list');
-        related.forEach(function (t) { rl.appendChild(toolCard(t)); });
-        $('related-wrap').classList.remove('hidden');
-      }
-
-      /* =====================================================================
-       * Structured data
-       * =================================================================== */
-      addJsonLd({
-        '@context': 'https://schema.org',
-        '@graph': [
-          {
-            '@type': 'WebApplication',
-            name: tool.title,
-            url: pageUrl,
-            description: tool.desc,
-            applicationCategory: 'UtilitiesApplication',
-            operatingSystem: 'Any',
-            offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' }
-          },
-          {
-            '@type': 'FAQPage',
-            mainEntity: faqs.map(function (f) {
-              return { '@type': 'Question', name: f.q, acceptedAnswer: { '@type': 'Answer', text: f.a } };
-            })
-          },
-          {
-            '@type': 'BreadcrumbList',
-            itemListElement: [
-              { '@type': 'ListItem', position: 1, name: 'Home', item: window.location.origin + '/' },
-              { '@type': 'ListItem', position: 2, name: tool.category },
-              { '@type': 'ListItem', position: 3, name: tool.title, item: pageUrl }
-            ]
-          }
-        ]
-      });
-
-      /* =====================================================================
-       * Show the tool
-       * =================================================================== */
-      $('tool-view').classList.remove('hidden');
-    })();
-  </script>
+  /* ---------- boot ---------- */
+  function boot() {
+    var params = new URLSearchParams(location.search);
+    var slug = params.get('tool') || params.get('id') || '';
+    var list = toolList();
+    if (!list.length) { renderNotFound(true); return; }
+    var tool = findTool(list, slug);
+    if (!tool) { renderNotFound(false); return; }
+    try { renderTool(tool); }
+    catch (e) {
+      console.error('[QuickToolHub] Render error:', e);
+      renderNotFound(false);
+    }
+  }
+  boot();
+})();
+</script>
 </body>
 </html>
