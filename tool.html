@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Free Online Tool - QuickToolHub</title>
+  <meta id="meta-description" name="description" content="QuickToolHub offers 500+ free online tools: text utilities, developer tools, calculators, converters and more. No sign-up, runs in your browser.">
+  <meta name="author" content="QuickToolHub">
+  <meta id="meta-robots" name="robots" content="index, follow">
+  <link id="link-canonical" rel="canonical" href="">
+  <meta name="theme-color" content="#4f46e5">
+
+  <!-- Open Graph / Twitter (updated dynamically for each tool) -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="QuickToolHub">
+  <meta id="og-title" property="og:title" content="Free Online Tool - QuickToolHub">
+  <meta id="og-description" property="og:description" content="Free online tools that run in your browser.">
+  <meta id="og-url" property="og:url" content="">
+  <meta name="twitter:card" content="summary">
+  <meta id="tw-title" name="twitter:title" content="Free Online Tool - QuickToolHub">
+  <meta id="tw-description" name="twitter:description" content="Free online tools that run in your browser.">
+
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%234f46e5'/%3E%3Ctext x='50' y='68' font-size='56' font-family='Arial' font-weight='bold' text-anchor='middle' fill='white'%3EQ%3C/text%3E%3C/svg%3E">
+
+  <!-- Apply saved theme before paint to avoid a flash -->
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem('theme');
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        if (saved === 'dark' || (!saved && prefersDark)) {
+          document.documentElement.classList.add('dark');
+        }
+      } catch (e) {}
+    })();
+  </script>
+
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { darkMode: 'class' };
+  </script>
+
+  <!-- FontAwesome 6 -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
+
+  <style>
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+    html.dark { color-scheme: dark; }
+    details > summary { list-style: none; }
+    details > summary::-webkit-details-marker { display: none; }
+    details[open] .faq-chevron { transform: rotate(180deg); }
+    #copy-tooltip { transition: opacity .15s ease, transform .15s ease; }
+  </style>
+
+  <!-- Tool registry (must load before the engine script at the end of <body>) -->
+  <script src="js/tools-data.js"></script>
+</head>
+<body class="min-h-screen flex flex-col bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 transition-colors duration-200">
+
+  <!-- Navbar -->
+  <header class="sticky top-0 z-50 border-b border-slate-200 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 backdrop-blur">
+    <nav class="max-w-5xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between" aria-label="Main navigation">
+      <a href="index.html" class="flex items-center gap-2 font-extrabold text-xl tracking-tight text-indigo-600 dark:text-indigo-400">
+        <span class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-indigo-600 text-white text-base">Q</span>
+        QuickToolHub
+      </a>
+      <div class="flex items-center gap-2 sm:gap-4">
+        <a href="index.html" class="text-sm font-medium px-3 py-2 rounded-lg text-slate-600 hover:text-indigo-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:text-indigo-400 dark:hover:bg-slate-800 transition">Home</a>
+        <button id="theme-toggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode"
+          class="w-10 h-10 inline-flex items-center justify-center rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 transition">
+          <i class="fa-solid fa-moon dark:hidden" aria-hidden="true"></i>
+          <i class="fa-solid fa-sun hidden dark:inline" aria-hidden="true"></i>
+        </button>
+      </div>
+    </nav>
+  </header>
+
+  <main class="flex-1 w-full max-w-4xl mx-auto px-4 sm:px-6 py-8 sm:py-10">
+
+    <noscript>
+      <div class="rounded-xl border border-amber-300 bg-amber-50 text-amber-900 p-4">JavaScript is required to run this tool. Please enable JavaScript and reload the page.</div>
+    </noscript>
+
+    <!-- ================= 404 STATE ================= -->
+    <section id="state-404" class="hidden text-center py-10 sm:py-16" aria-live="polite">
+      <div class="mx-auto w-20 h-20 rounded-full bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-300 flex items-center justify-center text-3xl mb-6">
+        <i class="fa-solid fa-compass" aria-hidden="true"></i>
+      </div>
+      <h1 class="text-3xl sm:text-4xl font-extrabold tracking-tight">Tool not found</h1>
+      <p id="notfound-message" class="mt-3 text-slate-600 dark:text-slate-400 max-w-xl mx-auto"></p>
+      <a href="index.html" class="mt-6 inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-offset-slate-900 transition">
+        <i class="fa-solid fa-house" aria-hidden="true"></i> Back to Home
+      </a>
+      <div id="suggestions-wrap" class="mt-12 text-left hidden">
+        <h2 class="text-lg font-bold mb-4 text-center">Or try one of these popular tools</h2>
+        <div id="suggestions" class="grid grid-cols-1 sm:grid-cols-2 gap-3"></div>
+      </div>
+    </section>
+
+    <!-- ================= TOOL VIEW ================= -->
+    <div id="tool-view" class="hidden">
+
+      <!-- Breadcrumbs -->
+      <nav aria-label="Breadcrumb" class="text-sm text-slate-500 dark:text-slate-400 mb-4">
+        <ol class="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <li><a href="index.html" class="hover:text-indigo-600 dark:hover:text-indigo-400 transition">Home</a></li>
+          <li aria-hidden="true"><i class="fa-solid fa-chevron-right text-[10px]"></i></li>
+          <li><a id="crumb-category" href="index.html" class="hover:text-indigo-600 dark:hover:text-indigo-400 transition"></a></li>
+          <li aria-hidden="true"><i class="fa-solid fa-chevron-right text-[10px]"></i></li>
+          <li id="crumb-tool" aria-current="page" class="font-medium text-slate-700 dark:text-slate-200"></li>
+        </ol>
+      </nav>
+
+      <!-- Title -->
+      <header class="flex items-start gap-4 mb-8">
+        <span class="flex-shrink-0 w-14 h-14 rounded-xl bg-indigo-600 text-white flex items-center justify-center text-2xl shadow-sm">
+          <i id="tool-icon" aria-hidden="true"></i>
+        </span>
+        <div>
+          <h1 id="tool-title" class="text-2xl sm:text-4xl font-extrabold tracking-tight"></h1>
+          <p id="tool-desc" class="mt-2 text-slate-600 dark:text-slate-400"></p>
+        </div>
+      </header>
+
+      <!-- AdSense Slot (Top) -->
+      <div id="ad-slot-top" class="mb-8 flex items-center justify-center min-h-[90px] rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-600 bg-slate-100/60 dark:bg-slate-800/40 text-xs uppercase tracking-wider text-slate-400 dark:text-slate-500" aria-label="Advertisement">
+        <!-- Paste your AdSense <ins class="adsbygoogle"> code here -->
+        Advertisement
+      </div>
+
+      <!-- Tool card -->
+      <section class="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-sm p-4 sm:p-6" aria-label="Tool workspace">
+        <form id="tool-form" novalidate autocomplete="off">
+          <div id="fields" class="grid grid-cols-1 sm:grid-cols-2 gap-4"></div>
+
+          <div class="mt-6 flex flex-wrap items-center gap-3">
+            <button id="run-btn" type="submit" class="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-offset-slate-800 transition">
+              <i class="fa-solid fa-play text-xs" aria-hidden="true"></i>
+              <span id="run-label">Run</span>
+            </button>
+            <button id="reset-btn" type="button" class="inline-flex items-center gap-2 px-5 py-3 rounded-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 font-medium hover:bg-slate-100 dark:hover:bg-slate-700 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-slate-400 dark:focus-visible:ring-offset-slate-800 transition">
+              <i class="fa-solid fa-rotate-left text-xs" aria-hidden="true"></i>
+              Clear / Reset
+            </button>
+          </div>
+        </form>
+
+        <!-- Error -->
+        <div id="error-box" role="alert" class="hidden mt-6 rounded-xl border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/40 text-red-800 dark:text-red-200 p-4 text-sm">
+          <i class="fa-solid fa-circle-exclamation mr-2" aria-hidden="true"></i><span id="error-text"></span>
+        </div>
+
+        <!-- Result -->
+        <div id="result-box" class="hidden mt-6 pt-6 border-t border-slate-200 dark:border-slate-700">
+          <div class="flex items-center justify-between gap-3 mb-3">
+            <h2 class="text-lg font-bold">Result</h2>
+            <div class="relative">
+              <span id="copy-tooltip" role="status" class="pointer-events-none absolute -top-10 left-1/2 -translate-x-1/2 translate-y-1 opacity-0 whitespace-nowrap rounded-md bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold px-3 py-1.5 shadow-lg">
+                <span id="copy-tooltip-text">Copied!</span>
+                <span class="absolute left-1/2 -bottom-1 -translate-x-1/2 w-2 h-2 rotate-45 bg-slate-900 dark:bg-slate-100"></span>
+              </span>
+              <button id="copy-btn" type="button" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-emerald-500 dark:focus-visible:ring-offset-slate-800 transition">
+                <i class="fa-regular fa-copy" aria-hidden="true"></i> Copy Result
+              </button>
+            </div>
+          </div>
+          <div id="result-text" class="hidden"></div>
+          <div id="result-stats" class="hidden grid grid-cols-1 sm:grid-cols-2 gap-3"></div>
+          <p id="result-note" class="hidden mt-3 text-xs text-slate-500 dark:text-slate-400"></p>
+        </div>
+      </section>
+
+      <!-- AdSense Slot (Bottom) -->
+      <div id="ad-slot-bottom" class="mt-8 flex items-center justify-center min-h-[90px] rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-600 bg-slate-100/60 dark:bg-slate-800/40 text-xs uppercase tracking-wider text-slate-400 dark:text-slate-500" aria-label="Advertisement">
+        <!-- Paste your AdSense <ins class="adsbygoogle"> code here -->
+        Advertisement
+      </div>
+
+      <!-- SEO content -->
+      <section class="mt-12" aria-label="About this tool">
+        <h2 id="about-heading" class="text-2xl font-bold mb-3"></h2>
+        <p id="about-text" class="text-slate-600 dark:text-slate-400"></p>
+
+        <h2 class="text-2xl font-bold mt-10 mb-4">Frequently Asked Questions</h2>
+        <div id="faq-list" class="space-y-3"></div>
+      </section>
+
+      <!-- Related tools -->
+      <section id="related-wrap" class="mt-12 hidden" aria-label="Related tools">
+        <h2 class="text-2xl font-bold mb-4">More <span id="related-category"></span></h2>
+        <div id="related-list" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
+      </section>
+    </div>
+  </main>
+
+  <!-- Footer -->
+  <footer class="border-t border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-sm text-slate-500 dark:text-slate-400">
+      <p>&copy; <span id="year">2026</span> QuickToolHub. All rights reserved.</p>
+      <nav class="flex items-center gap-5" aria-label="Footer navigation">
+        <a href="index.html" class="hover:text-indigo-600 dark:hover:text-indigo-400 transition">Home</a>
+        <a href="index.html" class="hover:text-indigo-600 dark:hover:text-indigo-400 transition">All Tools</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script>
+    (function () {
+      'use strict';
+
+      var $ = function (id) { return document.getElementById(id); };
+
+      /* =====================================================================
+       * Dark mode
+       * =================================================================== */
+      $('theme-toggle').addEventListener('click', function () {
+        var isDark = document.documentElement.classList.toggle('dark');
+        try { localStorage.setItem('theme', isDark ? 'dark' : 'light'); } catch (e) {}
+      });
+      $('year').textContent = new Date().getFullYear();
+
+      /* =====================================================================
+       * Resolve the requested tool from the URL (?tool=slug, ?id=slug also works)
+       * =================================================================== */
+      var params = new URLSearchParams(window.location.search);
+      var slug = (params.get('tool') || params.get('id') || '').trim().toLowerCase();
+      var registryLoaded = typeof ALL_TOOLS !== 'undefined' && Array.isArray(ALL_TOOLS);
+      var tool = registryLoaded ? ALL_TOOLS.find(function (t) { return t.id === slug; }) : null;
+
+      /* =====================================================================
+       * SEO helpers
+       * =================================================================== */
+      function setMeta(id, attr, value) {
+        var el = $(id);
+        if (el) el.setAttribute(attr, value);
+      }
+
+      function addJsonLd(obj) {
+        var s = document.createElement('script');
+        s.type = 'application/ld+json';
+        s.textContent = JSON.stringify(obj);
+        document.head.appendChild(s);
+      }
+
+      function canonicalUrl(id) {
+        return window.location.origin + window.location.pathname + '?tool=' + encodeURIComponent(id);
+      }
+
+      /* =====================================================================
+       * 404 state
+       * =================================================================== */
+      function showNotFound() {
+        document.title = 'Tool Not Found - QuickToolHub';
+        setMeta('meta-robots', 'content', 'noindex, follow');
+        setMeta('og-title', 'content', 'Tool Not Found - QuickToolHub');
+        setMeta('tw-title', 'content', 'Tool Not Found - QuickToolHub');
+
+        var msg = $('notfound-message');
+        if (!registryLoaded) {
+          msg.textContent = 'The tools library could not be loaded. Please check your connection and try again.';
+        } else if (slug) {
+          msg.textContent = 'We couldn\u2019t find a tool called \u201C' + slug + '\u201D. It may have been renamed or removed.';
+        } else {
+          msg.textContent = 'No tool was selected. Pick one from the home page to get started.';
+        }
+
+        if (registryLoaded && ALL_TOOLS.length) {
+          var box = $('suggestions');
+          ALL_TOOLS.slice(0, 6).forEach(function (t) { box.appendChild(toolCard(t)); });
+          $('suggestions-wrap').classList.remove('hidden');
+        }
+        $('state-404').classList.remove('hidden');
+      }
+
+      function toolCard(t) {
+        var a = document.createElement('a');
+        a.href = 'tool.html?tool=' + encodeURIComponent(t.id);
+        a.className = 'flex items-center gap-3 p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-indigo-400 dark:hover:border-indigo-500 hover:shadow-sm transition';
+        var iconWrap = document.createElement('span');
+        iconWrap.className = 'flex-shrink-0 w-10 h-10 rounded-lg bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-300 flex items-center justify-center';
+        var i = document.createElement('i');
+        i.className = t.icon;
+        i.setAttribute('aria-hidden', 'true');
+        iconWrap.appendChild(i);
+        var title = document.createElement('span');
+        title.className = 'font-semibold text-sm';
+        title.textContent = t.title;
+        a.appendChild(iconWrap);
+        a.appendChild(title);
+        return a;
+      }
+
+      if (!tool) {
+        showNotFound();
+        return;
+      }
+
+      /* =====================================================================
+       * Tool page: header, breadcrumbs, SEO
+       * =================================================================== */
+      var pageTitle = 'Free Online ' + tool.title + ' - QuickToolHub';
+      var metaDesc = tool.desc + ' Free, fast and private: it runs entirely in your browser.';
+      var pageUrl = canonicalUrl(tool.id);
+      var category = (typeof TOOL_CATEGORIES !== 'undefined' ? TOOL_CATEGORIES : []).find(function (c) { return c.name === tool.category; });
+
+      document.title = pageTitle;
+      setMeta('meta-description', 'content', metaDesc);
+      setMeta('link-canonical', 'href', pageUrl);
+      setMeta('og-title', 'content', pageTitle);
+      setMeta('og-description', 'content', metaDesc);
+      setMeta('og-url', 'content', pageUrl);
+      setMeta('tw-title', 'content', pageTitle);
+      setMeta('tw-description', 'content', metaDesc);
+
+      $('tool-icon').className = tool.icon;
+      $('tool-title').textContent = tool.title;
+      $('tool-desc').textContent = tool.desc;
+      $('crumb-tool').textContent = tool.title;
+      $('crumb-category').textContent = tool.category;
+      $('crumb-category').href = 'index.html' + (category ? '?category=' + encodeURIComponent(category.slug) : '');
+      $('run-label').textContent = tool.actionText || 'Run';
+
+      /* =====================================================================
+       * Render input fields
+       * =================================================================== */
+      var FIELD_CLASS = 'w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition';
+      var fieldEls = [];
+
+      function buildField(input) {
+        var type = input.type || 'text';
+        var fid = 'f-' + input.id;
+
+        var wrap = document.createElement('div');
+        if (type === 'textarea' || type === 'text') wrap.className = 'sm:col-span-2';
+
+        var label = document.createElement('label');
+        label.htmlFor = fid;
+        label.className = 'block text-sm font-semibold mb-1.5 text-slate-700 dark:text-slate-200';
+        label.textContent = input.label || input.id;
+        if (input.required) {
+          var star = document.createElement('span');
+          star.className = 'text-red-500';
+          star.textContent = ' *';
+          label.appendChild(star);
+        }
+        wrap.appendChild(label);
+
+        var el;
+        if (type === 'textarea') {
+          el = document.createElement('textarea');
+          el.rows = input.rows || 6;
+          el.spellcheck = false;
+          el.className = FIELD_CLASS + ' resize-y leading-relaxed';
+        } else if (type === 'select') {
+          el = document.createElement('select');
+          el.className = FIELD_CLASS;
+          (input.options || []).forEach(function (opt) {
+            var o = document.createElement('option');
+            o.value = opt.value;
+            o.textContent = opt.label;
+            el.appendChild(o);
+          });
+        } else {
+          el = document.createElement('input');
+          el.type = (type === 'number' || type === 'date') ? type : 'text';
+          el.className = FIELD_CLASS;
+          if (type === 'number') {
+            el.step = input.step !== undefined ? String(input.step) : 'any';
+            if (input.min !== undefined) el.min = input.min;
+            if (input.max !== undefined) el.max = input.max;
+            el.inputMode = 'decimal';
+          }
+        }
+        el.id = fid;
+        el.name = input.id;
+        if (input.placeholder && type !== 'select') el.placeholder = input.placeholder;
+
+        var def = input.default !== undefined && input.default !== null ? String(input.default) : '';
+        if (type === 'select') {
+          if (def !== '') el.value = def; else el.selectedIndex = 0;
+        } else {
+          el.value = def;
+        }
+
+        wrap.appendChild(el);
+
+        if (input.help) {
+          var help = document.createElement('p');
+          help.className = 'mt-1.5 text-xs text-slate-500 dark:text-slate-400';
+          help.textContent = input.help;
+          wrap.appendChild(help);
+        }
+
+        // Keyboard shortcuts: Enter runs single-line fields, Ctrl/Cmd+Enter runs textareas.
+        if (type === 'textarea') {
+          el.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); runTool(); }
+          });
+        } else if (type !== 'select') {
+          el.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') { e.preventDefault(); runTool(); }
+          });
+        }
+
+        fieldEls.push({ input: input, el: el, def: def, type: type });
+        return wrap;
+      }
+
+      var fieldsWrap = $('fields');
+      (tool.inputs || []).forEach(function (inp) { fieldsWrap.appendChild(buildField(inp)); });
+
+      /* =====================================================================
+       * Run / render result
+       * =================================================================== */
+      var errorBox = $('error-box');
+      var resultBox = $('result-box');
+      var resultText = $('result-text');
+      var resultStats = $('result-stats');
+      var resultNote = $('result-note');
+      var lastCopyText = '';
+
+      function collectValues() {
+        var values = {};
+        fieldEls.forEach(function (f) { values[f.input.id] = f.el.value; });
+        return values;
+      }
+
+      function showError(message) {
+        $('error-text').textContent = message || 'Something went wrong. Please check your input and try again.';
+        errorBox.classList.remove('hidden');
+        resultBox.classList.add('hidden');
+        lastCopyText = '';
+      }
+
+      function clearOutput() {
+        errorBox.classList.add('hidden');
+        resultBox.classList.add('hidden');
+        resultText.textContent = '';
+        resultStats.textContent = '';
+        resultNote.textContent = '';
+        lastCopyText = '';
+      }
+
+      function renderResult(res) {
+        var text = res.text !== undefined && res.text !== null ? String(res.text) : '';
+        var stats = Array.isArray(res.stats) ? res.stats : [];
+        var note = res.note ? String(res.note) : '';
+
+        // Main text block
+        resultText.textContent = text;
+        if (text !== '') {
+          var headline = stats.length > 0 && text.indexOf('\n') === -1;
+          resultText.className = headline
+            ? 'text-xl sm:text-2xl font-bold text-indigo-600 dark:text-indigo-300 break-words mb-4'
+            : 'whitespace-pre-wrap break-words font-mono text-sm leading-relaxed rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 p-4 max-h-96 overflow-auto mb-4';
+        } else {
+          resultText.className = 'hidden';
+        }
+
+        // Stats grid
+        resultStats.textContent = '';
+        if (stats.length) {
+          stats.forEach(function (s) {
+            var card = document.createElement('div');
+            card.className = 'rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 p-3';
+            var l = document.createElement('div');
+            l.className = 'text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400';
+            l.textContent = s.label;
+            var v = document.createElement('div');
+            v.className = 'mt-1 font-semibold break-words';
+            v.textContent = s.value;
+            card.appendChild(l);
+            card.appendChild(v);
+            resultStats.appendChild(card);
+          });
+          resultStats.classList.remove('hidden');
+        } else {
+          resultStats.classList.add('hidden');
+        }
+
+        // Note
+        if (note) {
+          resultNote.textContent = note;
+          resultNote.classList.remove('hidden');
+        } else {
+          resultNote.classList.add('hidden');
+        }
+
+        // What "Copy Result" copies: the main text, or the stats as lines if there is no text.
+        lastCopyText = text !== ''
+          ? text
+          : stats.map(function (s) { return s.label + ': ' + s.value; }).join('\n');
+
+        errorBox.classList.add('hidden');
+        resultBox.classList.remove('hidden');
+        resultBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+
+      function runTool() {
+        var res;
+        try {
+          res = tool.execute(collectValues());
+        } catch (err) {
+          showError(err && err.message);
+          errorBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          return;
+        }
+        if (res === undefined || res === null) {
+          showError('The tool did not return a result.');
+          return;
+        }
+        if (typeof res !== 'object') res = { text: String(res) };
+        renderResult(res);
+      }
+
+      $('tool-form').addEventListener('submit', function (e) {
+        e.preventDefault();
+        runTool();
+      });
+
+      /* =====================================================================
+       * Reset
+       * =================================================================== */
+      $('reset-btn').addEventListener('click', function () {
+        fieldEls.forEach(function (f) {
+          if (f.type === 'select' && f.def === '') f.el.selectedIndex = 0;
+          else f.el.value = f.def;
+        });
+        clearOutput();
+        if (fieldEls.length) fieldEls[0].el.focus();
+      });
+
+      /* =====================================================================
+       * Copy result
+       * =================================================================== */
+      var tooltip = $('copy-tooltip');
+      var tooltipText = $('copy-tooltip-text');
+      var tooltipTimer = null;
+
+      function showTooltip(message) {
+        tooltipText.textContent = message;
+        tooltip.style.opacity = '1';
+        tooltip.style.transform = 'translate(-50%, 0)';
+        clearTimeout(tooltipTimer);
+        tooltipTimer = setTimeout(function () {
+          tooltip.style.opacity = '0';
+          tooltip.style.transform = 'translate(-50%, 4px)';
+        }, 1500);
+      }
+
+      function fallbackCopy(text) {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.top = '-1000px';
+        document.body.appendChild(ta);
+        ta.select();
+        var ok = false;
+        try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+        document.body.removeChild(ta);
+        return ok;
+      }
+
+      $('copy-btn').addEventListener('click', function () {
+        if (!lastCopyText) { showTooltip('Nothing to copy'); return; }
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(lastCopyText).then(function () {
+            showTooltip('Copied!');
+          }).catch(function () {
+            showTooltip(fallbackCopy(lastCopyText) ? 'Copied!' : 'Copy failed');
+          });
+        } else {
+          showTooltip(fallbackCopy(lastCopyText) ? 'Copied!' : 'Copy failed');
+        }
+      });
+
+      /* =====================================================================
+       * Contextual SEO section + FAQs
+       * =================================================================== */
+      function joinList(items) {
+        if (items.length <= 1) return items.join('');
+        if (items.length === 2) return items[0] + ' and ' + items[1];
+        return items.slice(0, -1).join(', ') + ', and ' + items[items.length - 1];
+      }
+
+      var labels = (tool.inputs || []).map(function (i) { return '\u201C' + String(i.label || i.id).replace(/\s*\(.*?\)\s*/g, ' ').trim() + '\u201D'; });
+      var shownLabels = labels.length > 4 ? labels.slice(0, 4).concat(['the remaining options']) : labels;
+
+      var faqs = [
+        {
+          q: 'How do I use the ' + tool.title + '?',
+          a: 'Fill in ' + (shownLabels.length ? joinList(shownLabels) : 'the fields') + ' above, then click \u201C' + (tool.actionText || 'Run') +
+             '\u201D. Your result appears instantly below the button. You can copy it with one click, or press Clear / Reset to start over.'
+        },
+        {
+          q: 'Is the ' + tool.title + ' free and private?',
+          a: 'Yes. The ' + tool.title + ' is 100% free with no sign-up or limits. Everything is processed locally in your browser, so the data you enter is never uploaded to a server or stored.'
+        }
+      ];
+
+      $('about-heading').textContent = 'About the ' + tool.title;
+      $('about-text').textContent = tool.desc + ' This free ' + tool.category.toLowerCase() + ' tool by QuickToolHub works on any device and gives you results instantly.';
+
+      var faqList = $('faq-list');
+      faqs.forEach(function (f) {
+        var d = document.createElement('details');
+        d.className = 'group rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800';
+        var s = document.createElement('summary');
+        s.className = 'flex items-center justify-between gap-4 cursor-pointer select-none p-4 font-semibold';
+        var qt = document.createElement('span');
+        qt.textContent = f.q;
+        var chev = document.createElement('i');
+        chev.className = 'fa-solid fa-chevron-down faq-chevron text-sm transition-transform flex-shrink-0';
+        chev.setAttribute('aria-hidden', 'true');
+        s.appendChild(qt);
+        s.appendChild(chev);
+        var body = document.createElement('div');
+        body.className = 'px-4 pb-4 text-slate-600 dark:text-slate-400';
+        body.textContent = f.a;
+        d.appendChild(s);
+        d.appendChild(body);
+        faqList.appendChild(d);
+      });
+
+      /* =====================================================================
+       * Related tools (same category)
+       * =================================================================== */
+      var related = ALL_TOOLS.filter(function (t) { return t.category === tool.category && t.id !== tool.id; }).slice(0, 6);
+      if (related.length) {
+        $('related-category').textContent = tool.category;
+        var rl = $('related-list');
+        related.forEach(function (t) { rl.appendChild(toolCard(t)); });
+        $('related-wrap').classList.remove('hidden');
+      }
+
+      /* =====================================================================
+       * Structured data
+       * =================================================================== */
+      addJsonLd({
+        '@context': 'https://schema.org',
+        '@graph': [
+          {
+            '@type': 'WebApplication',
+            name: tool.title,
+            url: pageUrl,
+            description: tool.desc,
+            applicationCategory: 'UtilitiesApplication',
+            operatingSystem: 'Any',
+            offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' }
+          },
+          {
+            '@type': 'FAQPage',
+            mainEntity: faqs.map(function (f) {
+              return { '@type': 'Question', name: f.q, acceptedAnswer: { '@type': 'Answer', text: f.a } };
+            })
+          },
+          {
+            '@type': 'BreadcrumbList',
+            itemListElement: [
+              { '@type': 'ListItem', position: 1, name: 'Home', item: window.location.origin + '/' },
+              { '@type': 'ListItem', position: 2, name: tool.category },
+              { '@type': 'ListItem', position: 3, name: tool.title, item: pageUrl }
+            ]
+          }
+        ]
+      });
+
+      /* =====================================================================
+       * Show the tool
+       * =================================================================== */
+      $('tool-view').classList.remove('hidden');
+    })();
+  </script>
+</body>
+</html>
