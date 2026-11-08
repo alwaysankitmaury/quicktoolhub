@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Free Online Text Case Converter - QuickToolHub</title>
+  <meta name="description" content="Free online text case converter. Instantly change text to UPPERCASE, lowercase, Title Case, Sentence case, Capitalized Case or aLtErNaTiNg cAsE. No sign-up, works in your browser.">
+  <meta name="keywords" content="case converter, text case converter, uppercase converter, lowercase converter, title case converter, sentence case converter, alternating case, capitalize text online, QuickToolHub">
+  <meta name="author" content="QuickToolHub">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://quicktoolhub.com/tools/case-converter/">
+  <meta name="theme-color" content="#4f46e5">
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="QuickToolHub">
+  <meta property="og:title" content="Free Online Text Case Converter - QuickToolHub">
+  <meta property="og:description" content="Convert text to UPPERCASE, lowercase, Title Case, Sentence case and more in one click. 100% free and private.">
+  <meta property="og:url" content="https://quicktoolhub.com/tools/case-converter/">
+
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Free Online Text Case Converter - QuickToolHub">
+  <meta name="twitter:description" content="Convert text to UPPERCASE, lowercase, Title Case, Sentence case and more in one click.">
+
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%234f46e5'/%3E%3Ctext x='50' y='68' font-size='56' font-family='Arial' font-weight='bold' text-anchor='middle' fill='white'%3EQ%3C/text%3E%3C/svg%3E">
+
+  <!-- Apply saved theme before paint to avoid a flash -->
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem('theme');
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        if (saved === 'dark' || (!saved && prefersDark)) {
+          document.documentElement.classList.add('dark');
+        }
+      } catch (e) {}
+    })();
+  </script>
+
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { darkMode: 'class' };
+  </script>
+
+  <!-- Structured data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebApplication",
+        "name": "Online Text Case Converter",
+        "url": "https://quicktoolhub.com/tools/case-converter/",
+        "applicationCategory": "UtilitiesApplication",
+        "operatingSystem": "Any",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "description": "Free online tool to convert text to uppercase, lowercase, title case, sentence case, capitalized case and alternating case."
+      },
+      {
+        "@type": "FAQPage",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "What is the difference between Title Case and Capitalized Case?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Title Case capitalizes the first letter of every word and converts the remaining letters to lowercase. Capitalized Case also capitalizes the first letter of every word but leaves the other letters exactly as you typed them."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Is my text saved or uploaded anywhere?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "No. All conversions run locally in your browser with JavaScript. Your text is never sent to a server, stored or shared."
+            }
+          }
+        ]
+      }
+    ]
+  }
+  </script>
+
+  <style>
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+    details > summary { list-style: none; }
+    details > summary::-webkit-details-marker { display: none; }
+    details[open] .faq-chevron { transform: rotate(180deg); }
+    #copy-tooltip { transition: opacity .15s ease, transform .15s ease; }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 transition-colors duration-200">
+
+  <!-- Navbar -->
+  <header class="sticky top-0 z-50 border-b border-slate-200 dark:border-slate-700 bg-white/90 dark:bg-slate-900/90 backdrop-blur">
+    <nav class="max-w-5xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between" aria-label="Main navigation">
+      <a href="../../index.html" class="flex items-center gap-2 font-extrabold text-xl tracking-tight text-indigo-600 dark:text-indigo-400">
+        <span class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-indigo-600 text-white text-base">Q</span>
+        QuickToolHub
+      </a>
+      <div class="flex items-center gap-2 sm:gap-4">
+        <a href="../../index.html" class="text-sm font-medium px-3 py-2 rounded-lg text-slate-600 hover:text-indigo-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:text-indigo-400 dark:hover:bg-slate-800 transition">Home</a>
+        <button id="theme-toggle" type="button" aria-label="Toggle dark mode" title="Toggle dark mode"
+          class="w-10 h-10 inline-flex items-center justify-center rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 transition">
+          <!-- Moon (shown in light mode) -->
+          <svg id="icon-moon" class="w-5 h-5 dark:hidden" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg>
+          <!-- Sun (shown in dark mode) -->
+          <svg id="icon-sun" class="w-5 h-5 hidden dark:block" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path stroke-linecap="round" d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4l1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+      </div>
+    </nav>
+  </header>
+
+  <main class="flex-1 w-full max-w-5xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
+
+    <!-- Title -->
+    <section class="text-center mb-8">
+      <h1 class="text-3xl sm:text-4xl font-extrabold tracking-tight">Online Text Case Converter</h1>
+      <p class="mt-3 text-slate-600 dark:text-slate-400 max-w-2xl mx-auto">Paste or type your text, then switch it to UPPERCASE, lowercase, Title Case, Sentence case and more in a single click.</p>
+    </section>
+
+    <!-- AdSense Slot (Top) -->
+    <div id="ad-slot-top" class="mb-8 flex items-center justify-center min-h-[90px] rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-600 bg-slate-100/60 dark:bg-slate-800/40 text-xs uppercase tracking-wider text-slate-400 dark:text-slate-500" aria-label="Advertisement">
+      <!-- Paste your AdSense <ins class="adsbygoogle"> code here -->
+      Advertisement
+    </div>
+
+    <!-- Tool Card -->
+    <section class="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-sm p-4 sm:p-6" aria-label="Case converter tool">
+      <label for="case-input" class="block text-sm font-semibold mb-2 text-slate-700 dark:text-slate-200">Your text</label>
+      <textarea id="case-input" rows="10" spellcheck="false" placeholder="Type or paste your text here..."
+        class="w-full resize-y rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 p-4 text-base leading-relaxed focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition"></textarea>
+
+      <!-- Live counter -->
+      <div class="mt-2 flex flex-wrap items-center gap-x-6 gap-y-1 text-sm text-slate-500 dark:text-slate-400" aria-live="polite">
+        <span>Words: <strong id="word-count" class="text-slate-800 dark:text-slate-100">0</strong></span>
+        <span>Characters: <strong id="char-count" class="text-slate-800 dark:text-slate-100">0</strong></span>
+      </div>
+
+      <!-- Conversion buttons -->
+      <div class="mt-6">
+        <p class="text-sm font-semibold mb-3 text-slate-700 dark:text-slate-200">Choose a case</p>
+        <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <button type="button" data-case="upper" class="case-btn px-4 py-3 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-offset-slate-800 transition">UPPERCASE</button>
+          <button type="button" data-case="lower" class="case-btn px-4 py-3 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-offset-slate-800 transition">lowercase</button>
+          <button type="button" data-case="title" class="case-btn px-4 py-3 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-offset-slate-800 transition">Title Case</button>
+          <button type="button" data-case="sentence" class="case-btn px-4 py-3 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-offset-slate-800 transition">Sentence case</button>
+          <button type="button" data-case="capitalized" class="case-btn px-4 py-3 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-offset-slate-800 transition">Capitalized Case</button>
+          <button type="button" data-case="alternating" class="case-btn px-4 py-3 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 dark:focus-visible:ring-offset-slate-800 transition">Alternating cAsE</button>
+        </div>
+      </div>
+
+      <!-- Action controls -->
+      <div class="mt-6 pt-6 border-t border-slate-200 dark:border-slate-700 flex flex-wrap items-center gap-3">
+        <div class="relative">
+          <span id="copy-tooltip" role="status" class="pointer-events-none absolute -top-10 left-1/2 -translate-x-1/2 translate-y-1 opacity-0 whitespace-nowrap rounded-md bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-semibold px-3 py-1.5 shadow-lg">
+            Copied!
+            <span class="absolute left-1/2 -bottom-1 -translate-x-1/2 w-2 h-2 rotate-45 bg-slate-900 dark:bg-slate-100"></span>
+          </span>
+          <button id="copy-btn" type="button" class="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-emerald-600 text-white font-medium hover:bg-emerald-700 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-emerald-500 dark:focus-visible:ring-offset-slate-800 transition">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 012-2h9"/></svg>
+            Copy Text
+          </button>
+        </div>
+        <button id="clear-btn" type="button" class="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 font-medium hover:bg-slate-100 dark:hover:bg-slate-700 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-slate-400 dark:focus-visible:ring-offset-slate-800 transition">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+          Clear Text
+        </button>
+      </div>
+    </section>
+
+    <!-- AdSense Slot (Bottom) -->
+    <div id="ad-slot-bottom" class="mt-8 flex items-center justify-center min-h-[90px] rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-600 bg-slate-100/60 dark:bg-slate-800/40 text-xs uppercase tracking-wider text-slate-400 dark:text-slate-500" aria-label="Advertisement">
+      <!-- Paste your AdSense <ins class="adsbygoogle"> code here -->
+      Advertisement
+    </div>
+
+    <!-- SEO Content -->
+    <section class="mt-12">
+      <h2 class="text-2xl font-bold mb-6">How to Use the Case Converter</h2>
+      <ol class="space-y-5">
+        <li class="flex gap-4">
+          <span class="flex-shrink-0 w-9 h-9 rounded-full bg-indigo-600 text-white font-bold inline-flex items-center justify-center">1</span>
+          <div>
+            <h3 class="font-semibold">Enter or paste your text</h3>
+            <p class="text-slate-600 dark:text-slate-400 mt-1">Click inside the large text box and type, or paste any content such as a headline, paragraph, email or code comment. The word and character counters update instantly as you write, so you always know the size of your text.</p>
+          </div>
+        </li>
+        <li class="flex gap-4">
+          <span class="flex-shrink-0 w-9 h-9 rounded-full bg-indigo-600 text-white font-bold inline-flex items-center justify-center">2</span>
+          <div>
+            <h3 class="font-semibold">Pick a case style</h3>
+            <p class="text-slate-600 dark:text-slate-400 mt-1">Press one of the conversion buttons: UPPERCASE, lowercase, Title Case, Sentence case, Capitalized Case or Alternating cAsE. Your text is transformed immediately inside the same box. You can click a different button at any time to try another style.</p>
+          </div>
+        </li>
+        <li class="flex gap-4">
+          <span class="flex-shrink-0 w-9 h-9 rounded-full bg-indigo-600 text-white font-bold inline-flex items-center justify-center">3</span>
+          <div>
+            <h3 class="font-semibold">Copy the result or start over</h3>
+            <p class="text-slate-600 dark:text-slate-400 mt-1">Click <strong>Copy Text</strong> to send the converted text to your clipboard, and a quick "Copied!" tooltip will confirm it. Use <strong>Clear Text</strong> to empty the box and begin with a fresh piece of text. Everything happens in your browser, so nothing is uploaded.</p>
+          </div>
+        </li>
+      </ol>
+
+      <h2 class="text-2xl font-bold mt-12 mb-4">Frequently Asked Questions</h2>
+      <div class="space-y-3">
+        <details class="group rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
+          <summary class="flex items-center justify-between gap-4 cursor-pointer select-none p-4 font-semibold">
+            What is the difference between Title Case and Capitalized Case?
+            <svg class="faq-chevron w-5 h-5 flex-shrink-0 transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+          </summary>
+          <div class="px-4 pb-4 text-slate-600 dark:text-slate-400">
+            Title Case capitalizes the first letter of every word and converts all remaining letters to lowercase, so "hELLO wORLD" becomes "Hello World". Capitalized Case also capitalizes the first letter of every word, but it leaves the rest of each word untouched, so "iPhone case" becomes "IPhone Case".
+          </div>
+        </details>
+        <details class="group rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
+          <summary class="flex items-center justify-between gap-4 cursor-pointer select-none p-4 font-semibold">
+            Is my text saved or uploaded anywhere?
+            <svg class="faq-chevron w-5 h-5 flex-shrink-0 transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+          </summary>
+          <div class="px-4 pb-4 text-slate-600 dark:text-slate-400">
+            No. All conversions run locally in your browser using JavaScript. Your text is never sent to a server, stored or shared, which makes this tool safe for private or sensitive content.
+          </div>
+        </details>
+      </div>
+    </section>
+  </main>
+
+  <!-- Footer -->
+  <footer class="border-t border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-sm text-slate-500 dark:text-slate-400">
+      <p>&copy; <span id="year">2026</span> QuickToolHub. All rights reserved.</p>
+      <nav class="flex items-center gap-5" aria-label="Footer navigation">
+        <a href="../../index.html" class="hover:text-indigo-600 dark:hover:text-indigo-400 transition">Home</a>
+        <a href="../../index.html" class="hover:text-indigo-600 dark:hover:text-indigo-400 transition">All Tools</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script>
+    (function () {
+      'use strict';
+
+      /* ---------- Element references ---------- */
+      var input = document.getElementById('case-input');
+      var wordCountEl = document.getElementById('word-count');
+      var charCountEl = document.getElementById('char-count');
+      var copyBtn = document.getElementById('copy-btn');
+      var clearBtn = document.getElementById('clear-btn');
+      var tooltip = document.getElementById('copy-tooltip');
+      var themeToggle = document.getElementById('theme-toggle');
+      var caseButtons = document.querySelectorAll('.case-btn');
+      var tooltipTimer = null;
+
+      document.getElementById('year').textContent = new Date().getFullYear();
+
+      /* ---------- Dark mode ---------- */
+      themeToggle.addEventListener('click', function () {
+        var isDark = document.documentElement.classList.toggle('dark');
+        try { localStorage.setItem('theme', isDark ? 'dark' : 'light'); } catch (e) {}
+      });
+
+      /* ---------- Transformation algorithms ---------- */
+      function toUpper(text) {
+        return text.toUpperCase();
+      }
+
+      function toLower(text) {
+        return text.toLowerCase();
+      }
+
+      // Capitalize the first letter of every word, lowercase the rest.
+      function toTitleCase(text) {
+        return text.toLowerCase().replace(/(^|[\s\-_\/(\[{"'\u201C\u2018])(\p{L})/gu, function (m, sep, ch) {
+          return sep + ch.toUpperCase();
+        });
+      }
+
+      // Capitalize the first letter of every sentence, lowercase the rest.
+      function toSentenceCase(text) {
+        var lower = text.toLowerCase();
+        // First letter of the text, and first letter after . ! ? (plus closing quotes/brackets) and whitespace.
+        lower = lower.replace(/(^\s*[("'\u201C\u2018\[]*)(\p{L})/u, function (m, pre, ch) {
+          return pre + ch.toUpperCase();
+        });
+        lower = lower.replace(/([.!?\u2026]["')\]\u201D\u2019]*\s+[("'\u201C\u2018\[]*)(\p{L})/gu, function (m, pre, ch) {
+          return pre + ch.toUpperCase();
+        });
+        // First letter after a line break starts a new sentence too.
+        lower = lower.replace(/(\n\s*[("'\u201C\u2018\[]*)(\p{L})/gu, function (m, pre, ch) {
+          return pre + ch.toUpperCase();
+        });
+        // The standalone pronoun "i" (also in i'm, i'll, i've, i'd).
+        lower = lower.replace(/(^|[^\p{L}\p{N}'])i(?=$|[^\p{L}\p{N}]|'(?:m|ll|ve|d)\b)/gu, function (m, pre) {
+          return pre + 'I';
+        });
+        return lower;
+      }
+
+      // Capitalize the first letter of every word, leave the rest unchanged.
+      function toCapitalizedCase(text) {
+        return text.replace(/(^|[\s\-_\/(\[{"'\u201C\u2018])(\p{L})/gu, function (m, sep, ch) {
+          return sep + ch.toUpperCase();
+        });
+      }
+
+      // Alternate lower / upper on each letter (non-letters are skipped and do not affect the pattern).
+      function toAlternatingCase(text) {
+        var result = '';
+        var makeUpper = false;
+        var chars = Array.from(text);
+        for (var i = 0; i < chars.length; i++) {
+          var c = chars[i];
+          if (c.toLowerCase() !== c.toUpperCase()) {
+            result += makeUpper ? c.toUpperCase() : c.toLowerCase();
+            makeUpper = !makeUpper;
+          } else {
+            result += c;
+          }
+        }
+        return result;
+      }
+
+      var converters = {
+        upper: toUpper,
+        lower: toLower,
+        title: toTitleCase,
+        sentence: toSentenceCase,
+        capitalized: toCapitalizedCase,
+        alternating: toAlternatingCase
+      };
+
+      /* ---------- Live counter ---------- */
+      function updateCounts() {
+        var value = input.value;
+        var trimmed = value.trim();
+        var words = trimmed === '' ? 0 : trimmed.split(/\s+/).length;
+        wordCountEl.textContent = words.toLocaleString();
+        charCountEl.textContent = value.length.toLocaleString();
+      }
+
+      input.addEventListener('input', updateCounts);
+
+      /* ---------- Conversion buttons ---------- */
+      caseButtons.forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var fn = converters[btn.getAttribute('data-case')];
+          if (!fn || input.value === '') { input.focus(); return; }
+          input.value = fn(input.value);
+          updateCounts();
+        });
+      });
+
+      /* ---------- Copy to clipboard ---------- */
+      function showTooltip(message) {
+        tooltip.firstChild.nodeValue = '\n            ' + message + '\n            ';
+        tooltip.style.opacity = '1';
+        tooltip.style.transform = 'translate(-50%, 0)';
+        clearTimeout(tooltipTimer);
+        tooltipTimer = setTimeout(function () {
+          tooltip.style.opacity = '0';
+          tooltip.style.transform = 'translate(-50%, 4px)';
+        }, 1500);
+      }
+
+      function fallbackCopy(text) {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.top = '-1000px';
+        document.body.appendChild(ta);
+        ta.select();
+        var ok = false;
+        try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+        document.body.removeChild(ta);
+        return ok;
+      }
+
+      copyBtn.addEventListener('click', function () {
+        var text = input.value;
+        if (!text) { showTooltip('Nothing to copy'); input.focus(); return; }
+
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(text).then(function () {
+            showTooltip('Copied!');
+          }).catch(function () {
+            showTooltip(fallbackCopy(text) ? 'Copied!' : 'Copy failed');
+          });
+        } else {
+          showTooltip(fallbackCopy(text) ? 'Copied!' : 'Copy failed');
+        }
+      });
+
+      /* ---------- Clear ---------- */
+      clearBtn.addEventListener('click', function () {
+        input.value = '';
+        updateCounts();
+        input.focus();
+      });
+
+      updateCounts();
+    })();
+  </script>
+</body>
+</html>
