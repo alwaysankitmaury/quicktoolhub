@@ -1,794 +1,3636 @@
-const ALL_TOOLS = [
-/* =====================================================================
- * QuickToolHub — js/tools-data.js  (master tool database)
+/**
+ * tools-data.js
+ * Tool catalog: categories + tools. Extend by appending to TOOL_CATEGORIES / TOOLS.
  *
- * Tool contract: { id, title, category, icon, desc, inputs[], actionText, execute(values) }
+ * Tool fields:
+ *   id, slug (unique), name, category (matches a category id), shortDescription, howToUse,
+ *   features[], faqs[{question,answer}], seoTitle, metaDescription, keywords[], icon,
+ *   toolType, processing ("browser" | "server" | "external-api"),
+ *   implementationNote (optional: what must exist for the tool to work as described)
  *
- * Input types : text | textarea | number | select   (core)
- *               file | range | color | date | datetime-local   (extensions the UI should render)
- * Input extras: value (default), step, min, max, accept, multiple, rows
- * Select options: [{ value, label }, ...]
- * execute(values) returns an HTML string, OR a Promise<string>, OR an HTMLElement
- *   (interactive widgets such as the spin wheel, stopwatch, metronome).
- *   File inputs arrive as File (or File[] when multiple:true).
- *   All execute() functions are wrapped: exceptions become a friendly error block.
- * Shared helpers live on window.QTH (created by the first block below).
- * Third-party libs (loaded lazily from cdnjs only when needed): pdf.js, pdf-lib,
- *   jsPDF, html2canvas, qrious, jsQR, JsBarcode.
- * ===================================================================== */
-
-/* ---------- 1. SHARED HELPERS + ALGORITHMIC GENERATORS ---------- */
-...(function () {
-  'use strict';
-  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const num = v => (v === '' || v == null) ? NaN : parseFloat(String(v).replace(/,/g, '').trim());
-  const opt = v => { const n = num(v); return isFinite(n) ? n : 0; };
-  const bad = (...a) => a.some(x => typeof x !== 'number' || !isFinite(x));
-  const fmt = (n, d = 2) => isFinite(n) ? Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }) : '—';
-  const fmtIN = (n, d = 2) => isFinite(n) ? Number(n).toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d }) : '—';
-  const sig = n => { if (!isFinite(n)) return '—'; if (n === 0) return '0'; const a = Math.abs(n); if (a >= 1e18 || a < 1e-9) return n.toExponential(6).replace(/\.?0+e/, 'e'); return n.toLocaleString('en-US', { maximumSignificantDigits: 10 }); };
-  const money = (n, s) => (s || '') + (s === '₹' ? fmtIN(n) : fmt(n));
-  const err = m => '<div class="qt-error" style="color:#dc2626;font-weight:600">⚠ ' + esc(m) + '</div>';
-  const kv = (rows, title) => '<div class="qt-result">' + (title ? '<h3 style="margin:0 0 8px">' + esc(title) + '</h3>' : '') + '<table class="qt-table" style="width:100%;border-collapse:collapse">' + rows.map(r => '<tr style="border-bottom:1px solid rgba(128,128,128,.25)"><th style="text-align:left;padding:7px 10px;font-weight:600">' + r[0] + '</th><td style="padding:7px 10px;text-align:right">' + r[1] + '</td></tr>').join('') + '</table></div>';
-  const table = (head, rows) => '<table class="qt-table" style="width:100%;border-collapse:collapse;font-size:.92em"><thead><tr>' + head.map(h => '<th style="text-align:right;padding:6px 8px;position:sticky;top:0;background:inherit;border-bottom:2px solid rgba(128,128,128,.4)">' + h + '</th>').join('') + '</tr></thead><tbody>' + rows.map(r => '<tr style="border-bottom:1px solid rgba(128,128,128,.2)">' + r.map(c => '<td style="padding:5px 8px;text-align:right">' + c + '</td>').join('') + '</tr>').join('') + '</tbody></table>';
-  const scroll = h => '<div style="max-height:380px;overflow:auto">' + h + '</div>';
-  const pre = s => '<pre class="qt-pre" style="white-space:pre-wrap;word-break:break-word;margin:0;font-family:ui-monospace,Menlo,Consolas,monospace">' + esc(s) + '</pre>';
-  const load = (() => { const c = {}; return url => c[url] || (c[url] = new Promise((res, rej) => { const s = document.createElement('script'); s.src = url; s.onload = res; s.onerror = () => { delete c[url]; rej(new Error('Could not load required library. Check your internet connection.')); }; document.head.appendChild(s); })); })();
-  const readAs = (file, mode) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error('Could not read file')); r[mode](file); });
-  const imgFrom = file => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Could not read this image. Try PNG, JPG or WebP.')); i.src = URL.createObjectURL(file); });
-  const link = (blob, name, label) => '<a class="qt-download" href="' + URL.createObjectURL(blob) + '" download="' + esc(name) + '" style="display:inline-block;margin:6px 8px 6px 0;padding:8px 14px;border-radius:8px;background:#2563eb;color:#fff;text-decoration:none;font-weight:600">⬇ ' + esc(label || name) + '</a>';
-  const kb = b => b > 1048576 ? (b / 1048576).toFixed(2) + ' MB' : (b / 1024).toFixed(1) + ' KB';
-  const files = v => !v ? [] : (v instanceof Blob ? [v] : Array.from(v));
-  const gcd = (a, b) => { a = Math.abs(a); b = Math.abs(b); while (b) { [a, b] = [b, a % b]; } return a; };
-  const slug = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  const emi = (P, rate, n) => { const r = rate / 1200; return r === 0 ? P / n : P * r * Math.pow(1 + r, n) / (Math.pow(1 + r, n) - 1); };
-  const sched = (P, rate, n, pay) => { let b = P, rows = [], ti = 0; const r = rate / 1200; for (let m = 1; m <= n && b > 0.005; m++) { const i = b * r; let p = pay - i; if (p > b || m === n) p = b; b -= p; ti += i; rows.push([m, fmt(p + i), fmt(p), fmt(i), fmt(Math.max(b, 0))]); } return { rows, ti }; };
-  const ranges = (s, max) => { const out = []; String(s || '').split(',').forEach(p => { p = p.trim(); if (!p) return; const m = p.match(/^(\d+)(?:\s*-\s*(\d+))?$/); if (!m) throw new Error('Invalid page range: "' + p + '"'); const a = +m[1], b = m[2] ? +m[2] : a; if (a < 1 || b < a || b > max) throw new Error('Page range out of bounds (1–' + max + '): ' + p); for (let i = a; i <= b; i++) out.push(i - 1); }); if (!out.length) throw new Error('Enter pages, e.g. 1-3,5'); return out; };
-  const el = (t, a, ...k) => { const e = document.createElement(t); Object.entries(a || {}).forEach(([x, y]) => { if (x === 'style') e.style.cssText = y; else if (x.startsWith('on')) e.addEventListener(x.slice(2), y); else if (x === 'text') e.textContent = y; else e.setAttribute(x, y); }); k.flat().forEach(c => e.append(c)); return e; };
-  const toBlob = (canvas, type, q) => new Promise(res => canvas.toBlob(res, type, q));
-
-  /* input + tool constructors */
-  const N = (id, label, ph, x) => Object.assign({ id, label, type: 'number', placeholder: ph || '', step: 'any' }, x || {});
-  const S = (id, label, ph, x) => Object.assign({ id, label, type: 'text', placeholder: ph || '' }, x || {});
-  const A = (id, label, ph, x) => Object.assign({ id, label, type: 'textarea', placeholder: ph || '', rows: 6 }, x || {});
-  const SEL = (id, label, opts, def) => { const o = opts.map(x => typeof x === 'string' ? { value: x, label: x } : Array.isArray(x) ? { value: x[0], label: x[1] } : x); return { id, label, type: 'select', options: o, value: def !== undefined ? def : o[0].value }; };
-  const F = (id, label, accept, multiple) => ({ id, label, type: 'file', accept: accept || '*/*', multiple: !!multiple });
-  const RNG = (id, label, min, max, value, step) => ({ id, label, type: 'range', min, max, value, step: step || 1 });
-  const COL = (id, label, value) => ({ id, label, type: 'color', value: value || '#000000' });
-  const D = (id, label, value) => ({ id, label, type: 'date', value: value || '' });
-  const T = (id, title, category, icon, desc, inputs, actionText, fn) => ({
-    id, title, category, icon, desc, inputs, actionText,
-    execute: function (values) {
-      try { const r = fn(values || {}); return (r && typeof r.then === 'function') ? r.catch(e => err(e && e.message || e)) : r; }
-      catch (e) { return err(e && e.message || String(e)); }
-    }
-  });
-  const today = () => new Date().toISOString().slice(0, 10);
-
-  /* ---------- currencies (static fallback + live refresh) ---------- */
-  const CUR = [['USD', 'US Dollars', 1], ['EUR', 'Euros', 0.86], ['GBP', 'British Pounds', 0.75], ['INR', 'Indian Rupees', 88], ['JPY', 'Japanese Yen', 150], ['AUD', 'Australian Dollars', 1.52], ['CAD', 'Canadian Dollars', 1.38], ['CHF', 'Swiss Francs', 0.8], ['AED', 'UAE Dirhams', 3.6725], ['SGD', 'Singapore Dollars', 1.3], ['CNY', 'Chinese Yuan', 7.2], ['SAR', 'Saudi Riyals', 3.75], ['ZAR', 'South African Rand', 18], ['BRL', 'Brazilian Reais', 5.4], ['MXN', 'Mexican Pesos', 18.5], ['KRW', 'South Korean Won', 1400], ['NZD', 'New Zealand Dollars', 1.65], ['SEK', 'Swedish Kronor', 9.8], ['NOK', 'Norwegian Kroner', 10.2], ['PLN', 'Polish Zloty', 3.7], ['TRY', 'Turkish Lira', 40], ['THB', 'Thai Baht', 33], ['IDR', 'Indonesian Rupiah', 16300], ['PKR', 'Pakistani Rupees', 280], ['BDT', 'Bangladeshi Taka', 122], ['NPR', 'Nepalese Rupees', 141], ['LKR', 'Sri Lankan Rupees', 300]];
-  let ratesP = null;
-  const getRates = () => {
-    if (ratesP) return ratesP;
-    ratesP = (async () => {
-      const base = {}; CUR.forEach(c => base[c[0]] = c[2]);
-      try {
-        const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 5000);
-        const r = await fetch('https://open.er-api.com/v6/latest/USD', { signal: ctl.signal }); clearTimeout(t);
-        const j = await r.json();
-        if (j && j.rates) { CUR.forEach(c => { if (j.rates[c[0]]) base[c[0]] = j.rates[c[0]]; }); return { rates: base, live: true, updated: j.time_last_update_utc || '' }; }
-      } catch (e) { /* offline fallback */ }
-      return { rates: base, live: false, updated: '' };
-    })();
-    setTimeout(() => { ratesP = null; }, 600000);
-    return ratesP;
-  };
-  const curNote = r => '<div style="opacity:.7;font-size:.85em;margin-top:8px">' + (r.live ? 'Live mid-market rates (open.er-api.com). ' + esc(r.updated) : 'Offline estimate — rates are approximate. Reconnect for live rates.') + ' Not for trading.</div>';
-
-  const H = globalThis.QTH = { esc, num, opt, bad, fmt, fmtIN, sig, money, err, kv, table, scroll, pre, load, readAs, imgFrom, link, kb, files, gcd, slug, emi, sched, ranges, el, toBlob, N, S, A, SEL, F, RNG, COL, D, T, today, CUR, getRates, curNote };
-
-  const out = [];
-
-  /* ---------- A. Unit converters (algorithmic) ---------- */
-  const CATS = [
-    { key: 'length', name: 'Length', icon: 'fa-solid fa-ruler-horizontal', pairs: 9, u: [['m', 'Meters', 1], ['km', 'Kilometers', 1000], ['cm', 'Centimeters', 0.01], ['mm', 'Millimeters', 0.001], ['mi', 'Miles', 1609.344], ['yd', 'Yards', 0.9144], ['ft', 'Feet', 0.3048], ['in', 'Inches', 0.0254], ['nmi', 'Nautical Miles', 1852], ['um', 'Micrometers', 1e-6], ['nm', 'Nanometers', 1e-9], ['ly', 'Light Years', 9460730472580800]] },
-    { key: 'weight', name: 'Weight & Mass', icon: 'fa-solid fa-weight-hanging', pairs: 8, u: [['kg', 'Kilograms', 1], ['g', 'Grams', 0.001], ['lb', 'Pounds', 0.45359237], ['oz', 'Ounces', 0.028349523125], ['t', 'Metric Tons', 1000], ['st', 'Stone', 6.35029318], ['mg', 'Milligrams', 1e-6], ['ust', 'US Tons', 907.18474], ['qtl', 'Quintals', 100], ['tola', 'Tola', 0.01166375], ['ct', 'Carats', 0.0002], ['ug', 'Micrograms', 1e-9]] },
-    { key: 'land', name: 'Area & Land', icon: 'fa-solid fa-vector-square', pairs: 10, title: 'Land Unit Converter (Bigha, Biswa, Guntha, Acre, Hectare)', desc: 'Convert land area between Bigha, Biswa, Guntha, Acre, Hectare, sq ft, sq yd, sq m and more (Bigha/Biswa use the Uttar Pradesh standard — local values vary).', u: [['sqm', 'Square Meters', 1], ['sqft', 'Square Feet', 0.09290304], ['sqyd', 'Square Yards', 0.83612736], ['acre', 'Acres', 4046.8564224], ['hectare', 'Hectares', 10000], ['bigha', 'Bigha (UP)', 2529.2853], ['biswa', 'Biswa (UP)', 126.464265], ['guntha', 'Guntha', 101.171414], ['sqkm', 'Square Kilometers', 1e6], ['sqmi', 'Square Miles', 2589988.110336], ['kanal', 'Kanal', 505.857], ['sqcm', 'Square Centimeters', 1e-4], ['sqmm', 'Square Millimeters', 1e-6], ['sqin', 'Square Inches', 6.4516e-4]] },
-    { key: 'volume', name: 'Volume', icon: 'fa-solid fa-flask', pairs: 9, u: [['l', 'Liters', 1], ['ml', 'Milliliters', 0.001], ['m3', 'Cubic Meters', 1000], ['usgal', 'US Gallons', 3.785411784], ['ukgal', 'UK Gallons', 4.54609], ['usqt', 'US Quarts', 0.946352946], ['uspt', 'US Pints', 0.473176473], ['uscup', 'US Cups', 0.2365882365], ['usfloz', 'US Fluid Ounces', 0.0295735295625], ['tbsp', 'Tablespoons', 0.01478676478125], ['tsp', 'Teaspoons', 0.00492892159375], ['cm3', 'Cubic Centimeters', 0.001], ['in3', 'Cubic Inches', 0.016387064], ['ft3', 'Cubic Feet', 28.316846592], ['bbl', 'Oil Barrels', 158.987294928]] },
-    { key: 'speed', name: 'Speed', icon: 'fa-solid fa-gauge-high', pairs: 5, u: [['kmh', 'Kilometers per Hour', 1 / 3.6], ['mph', 'Miles per Hour', 0.44704], ['ms', 'Meters per Second', 1], ['kn', 'Knots', 0.514444444], ['fps', 'Feet per Second', 0.3048], ['mach', 'Mach', 340.29]] },
-    { key: 'time', name: 'Time', icon: 'fa-solid fa-clock', pairs: 8, u: [['sec', 'Seconds', 1], ['min', 'Minutes', 60], ['hr', 'Hours', 3600], ['day', 'Days', 86400], ['wk', 'Weeks', 604800], ['mo', 'Months', 2629746], ['yr', 'Years', 31557600], ['ms', 'Milliseconds', 0.001], ['dec', 'Decades', 315576000], ['cent', 'Centuries', 3155760000]] },
-    { key: 'data', name: 'Digital Storage', icon: 'fa-solid fa-hard-drive', pairs: 8, u: [['b', 'Bytes', 1], ['kb', 'Kilobytes', 1e3], ['mb', 'Megabytes', 1e6], ['gb', 'Gigabytes', 1e9], ['tb', 'Terabytes', 1e12], ['pb', 'Petabytes', 1e15], ['bit', 'Bits', 0.125], ['kib', 'Kibibytes', 1024], ['mib', 'Mebibytes', 1048576], ['gib', 'Gibibytes', 1073741824], ['tib', 'Tebibytes', 1099511627776]] },
-    { key: 'energy', name: 'Energy', icon: 'fa-solid fa-bolt', pairs: 6, u: [['j', 'Joules', 1], ['kj', 'Kilojoules', 1000], ['cal', 'Calories', 4.184], ['kcal', 'Kilocalories', 4184], ['wh', 'Watt-hours', 3600], ['kwh', 'Kilowatt-hours', 3.6e6], ['btu', 'BTU', 1055.05585], ['ftlb', 'Foot-pounds', 1.3558179], ['ev', 'Electronvolts', 1.602176634e-19]] },
-    { key: 'power', name: 'Power', icon: 'fa-solid fa-plug', pairs: 6, u: [['w', 'Watts', 1], ['kw', 'Kilowatts', 1000], ['mw', 'Megawatts', 1e6], ['hp', 'Horsepower', 745.699872], ['mhp', 'Metric Horsepower', 735.49875], ['btuh', 'BTU per Hour', 0.29307107]] },
-    { key: 'pressure', name: 'Pressure', icon: 'fa-solid fa-gauge', pairs: 6, u: [['pa', 'Pascals', 1], ['kpa', 'Kilopascals', 1000], ['bar', 'Bar', 1e5], ['psi', 'PSI', 6894.757293], ['atm', 'Atmospheres', 101325], ['mmhg', 'mmHg', 133.322387], ['mbar', 'Millibar', 100], ['inhg', 'inHg', 3386.389], ['torr', 'Torr', 133.322368]] },
-    { key: 'force', name: 'Force', icon: 'fa-solid fa-arrows-up-down-left-right', pairs: 4, u: [['n', 'Newtons', 1], ['kn', 'Kilonewtons', 1000], ['lbf', 'Pound-force', 4.4482216], ['kgf', 'Kilogram-force', 9.80665], ['dyn', 'Dynes', 1e-5]] },
-    { key: 'angle', name: 'Angle', icon: 'fa-solid fa-angle-right', pairs: 3, u: [['deg', 'Degrees', 1], ['rad', 'Radians', 180 / Math.PI], ['grad', 'Gradians', 0.9], ['arcmin', 'Arcminutes', 1 / 60], ['arcsec', 'Arcseconds', 1 / 3600], ['turn', 'Turns', 360]] },
-    { key: 'frequency', name: 'Frequency', icon: 'fa-solid fa-wave-square', pairs: 4, u: [['hz', 'Hertz', 1], ['khz', 'Kilohertz', 1e3], ['mhz', 'Megahertz', 1e6], ['ghz', 'Gigahertz', 1e9], ['rpm', 'RPM', 1 / 60]] },
-    { key: 'temperature', name: 'Temperature', icon: 'fa-solid fa-temperature-half', pairs: 4, u: [['c', 'Celsius', 1], ['f', 'Fahrenheit', 1], ['k', 'Kelvin', 1], ['r', 'Rankine', 1]], to: { c: x => x, f: x => (x - 32) * 5 / 9, k: x => x - 273.15, r: x => (x - 491.67) * 5 / 9 }, from: { c: x => x, f: x => x * 9 / 5 + 32, k: x => x + 273.15, r: x => (x + 273.15) * 9 / 5 } },
-    { key: 'fuel', name: 'Fuel Economy', icon: 'fa-solid fa-gas-pump', pairs: 4, u: [['mpgus', 'MPG (US)', 1], ['mpguk', 'MPG (UK)', 1], ['kml', 'Kilometers per Liter', 1], ['l100', 'Liters per 100 km', 1]], to: { kml: x => x, mpgus: x => x * 0.425143707, mpguk: x => x * 0.354006189, l100: x => 100 / x }, from: { kml: x => x, mpgus: x => x / 0.425143707, mpguk: x => x / 0.354006189, l100: x => 100 / x } }
-  ];
-  CATS.forEach(c => {
-    c.map = {}; c.nm = {}; c.u.forEach(x => { c.map[x[0]] = x[2]; c.nm[x[0]] = x[1]; });
-    const cat = c.name + ' Converters';
-    const conv = (v, f, t) => c.to ? c.from[t](c.to[f](v)) : v * c.map[f] / c.map[t];
-    const show = (v, f, t) => {
-      if (bad(v)) return err('Enter a valid number.');
-      const r = conv(v, f, t); if (!isFinite(r)) return err('Result is undefined for this input (check for zero).');
-      return '<div class="qt-result"><div style="font-size:1.35em;font-weight:700">' + sig(v) + ' ' + esc(c.nm[f]) + ' = ' + sig(r) + ' ' + esc(c.nm[t]) + '</div><div style="opacity:.75;margin-top:6px">1 ' + esc(c.nm[f]) + ' = ' + sig(conv(1, f, t)) + ' ' + esc(c.nm[t]) + '</div></div>';
-    };
-    const opts = c.u.map(x => ({ value: x[0], label: x[1] }));
-    out.push(T(c.key + '-converter', c.title || (c.name + ' Converter'), cat, c.icon, c.desc || ('Convert any ' + c.name.toLowerCase() + ' unit to another, with a full comparison table.'),
-      [N('value', 'Value', 'Enter value', { value: 1 }), SEL('from', 'From', opts, c.u[0][0]), SEL('to', 'To', opts, c.u[1][0])], 'Convert',
-      v => {
-        const x = num(v.value); const base = show(x, v.from, v.to); if (bad(x)) return base;
-        const rows = c.u.map(u => { const r = conv(x, v.from, u[0]); return [esc(u[1]), isFinite(r) ? sig(r) : '—']; });
-        return base + '<div style="margin-top:12px">' + scroll(table(['Unit', 'Value'], rows)) + '</div>';
-      }));
-    const P = c.u.slice(0, c.pairs);
-    P.forEach(a => P.forEach(b => {
-      if (a[0] === b[0]) return;
-      out.push(T(slug(a[1] + ' to ' + b[1]), a[1] + ' to ' + b[1], cat, c.icon, 'Convert ' + a[1].toLowerCase() + ' to ' + b[1].toLowerCase() + ' instantly.',
-        [N('value', a[1], 'Enter ' + a[1].toLowerCase(), { value: 1 })], 'Convert', v => show(num(v.value), a[0], b[0])));
-    }));
-  });
-
-  /* ---------- B. Currency pair converters (live → offline fallback) ---------- */
-  const copts = CUR.map(c => ({ value: c[0], label: c[0] + ' — ' + c[1] }));
-  const cvt = async (amt, f, t) => {
-    if (bad(amt)) return err('Enter a valid amount.');
-    const r = await getRates(); const rate = r.rates[t] / r.rates[f]; const res = amt * rate;
-    return '<div class="qt-result"><div style="font-size:1.35em;font-weight:700">' + fmt(amt) + ' ' + f + ' = ' + fmt(res, res < 1 ? 4 : 2) + ' ' + t + '</div><div style="opacity:.75;margin-top:6px">1 ' + f + ' = ' + sig(rate) + ' ' + t + ' · 1 ' + t + ' = ' + sig(1 / rate) + ' ' + f + '</div>' + curNote(r) + '</div>';
-  };
-  out.push(T('currency-converter', 'Currency Converter', 'Currency Tools', 'fa-solid fa-money-bill-transfer', 'Convert between 27 world currencies using live mid-market rates (offline estimate fallback).',
-    [N('amount', 'Amount', '100', { value: 100 }), SEL('from', 'From', copts, 'USD'), SEL('to', 'To', copts, 'INR')], 'Convert', v => cvt(num(v.amount), v.from, v.to)));
-  const topC = CUR.slice(0, 10).map(c => c[0]);
-  topC.forEach(a => topC.forEach(b => {
-    if (a === b) return; const na = CUR.find(c => c[0] === a)[1], nb = CUR.find(c => c[0] === b)[1];
-    out.push(T(a.toLowerCase() + '-to-' + b.toLowerCase(), na + ' to ' + nb + ' (' + a + ' to ' + b + ')', 'Currency Tools', 'fa-solid fa-coins', 'Convert ' + a + ' to ' + b + ' at live or estimated exchange rates.',
-      [N('amount', 'Amount in ' + a, '100', { value: 100 })], 'Convert', v => cvt(num(v.amount), a, b)));
-  }));
-
-  /* ---------- C. Number-base pair converters ---------- */
-  const BS = [['binary', 'Binary', 2], ['octal', 'Octal', 8], ['decimal', 'Decimal', 10], ['hexadecimal', 'Hexadecimal', 16]];
-  const parseBig = (s, b) => { s = String(s).trim().toLowerCase().replace(/^0[xbo]/, '').replace(/[\s_]/g, ''); if (!s) return null; let r = 0n; const B = BigInt(b); for (const ch of s) { const d = parseInt(ch, 36); if (isNaN(d) || d >= b) return null; r = r * B + BigInt(d); } return r; };
-  const baseOut = (s, fb, tb) => { const n = parseBig(s, fb); if (n === null) return err('Invalid base-' + fb + ' number.'); return '<div class="qt-result"><div style="font-size:1.25em;font-weight:700;word-break:break-all">' + esc(n.toString(tb).toUpperCase()) + '</div><div style="opacity:.7;margin-top:6px">Base ' + fb + ' → Base ' + tb + '</div></div>'; };
-  BS.forEach(a => BS.forEach(b => { if (a[0] === b[0]) return; out.push(T(a[0] + '-to-' + b[0], a[1] + ' to ' + b[1] + ' Converter', 'Math & Science', 'fa-solid fa-binary', 'Convert ' + a[1].toLowerCase() + ' numbers to ' + b[1].toLowerCase() + ' (supports very large values).', [S('value', a[1] + ' number', a[2] === 2 ? '101101' : a[2] === 16 ? '1F4A' : '255')], 'Convert', v => baseOut(v.value, a[2], b[2]))); }));
-  out.push(T('number-base-converter', 'Number Base Converter (2–36)', 'Math & Science', 'fa-solid fa-hashtag', 'Convert integers between any two bases from 2 to 36.', [S('value', 'Number', 'e.g. FF'), N('from', 'From base', '16', { value: 10, min: 2, max: 36 }), N('to', 'To base', '2', { value: 2, min: 2, max: 36 })], 'Convert', v => { const f = num(v.from), t = num(v.to); if (bad(f, t) || f < 2 || t < 2 || f > 36 || t > 36) return err('Bases must be between 2 and 36.'); return baseOut(v.value, f, t); }));
-
-  /* ---------- D. Text transformation tools (algorithmic) ---------- */
-  const words = s => String(s).replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(/[^A-Za-z0-9]+/).filter(Boolean);
-  const lines = t => String(t).split(/\r?\n/);
-  const flip = { a: 'ɐ', b: 'q', c: 'ɔ', d: 'p', e: 'ǝ', f: 'ɟ', g: 'ƃ', h: 'ɥ', i: 'ᴉ', j: 'ɾ', k: 'ʞ', l: 'l', m: 'ɯ', n: 'u', o: 'o', p: 'd', q: 'b', r: 'ɹ', s: 's', t: 'ʇ', u: 'n', v: 'ʌ', w: 'ʍ', x: 'x', y: 'ʎ', z: 'z', '?': '¿', '!': '¡', '.': '˙', ',': '\'' };
-  const leet = { a: '4', e: '3', i: '1', o: '0', s: '5', t: '7', l: '1', g: '9' };
-  const TX = [
-    ['uppercase-converter', 'UPPERCASE Converter', 'Convert text to UPPERCASE.', t => t.toUpperCase()],
-    ['lowercase-converter', 'lowercase Converter', 'Convert text to lowercase.', t => t.toLowerCase()],
-    ['title-case-converter', 'Title Case Converter', 'Capitalize the first letter of every word.', t => t.toLowerCase().replace(/(^|[\s\-(])([a-z])/g, (m, a, b) => a + b.toUpperCase())],
-    ['sentence-case-converter', 'Sentence Case Converter', 'Capitalize the first letter of each sentence.', t => t.toLowerCase().replace(/(^\s*|[.!?]\s+)([a-z])/g, (m, a, b) => a + b.toUpperCase())],
-    ['camel-case-converter', 'camelCase Converter', 'Convert text to camelCase for code.', t => words(t).map((x, i) => i ? x[0].toUpperCase() + x.slice(1).toLowerCase() : x.toLowerCase()).join('')],
-    ['pascal-case-converter', 'PascalCase Converter', 'Convert text to PascalCase.', t => words(t).map(x => x[0].toUpperCase() + x.slice(1).toLowerCase()).join('')],
-    ['snake-case-converter', 'snake_case Converter', 'Convert text to snake_case.', t => words(t).join('_').toLowerCase()],
-    ['kebab-case-converter', 'kebab-case Converter', 'Convert text to kebab-case.', t => words(t).join('-').toLowerCase()],
-    ['constant-case-converter', 'CONSTANT_CASE Converter', 'Convert text to CONSTANT_CASE.', t => words(t).join('_').toUpperCase()],
-    ['dot-case-converter', 'dot.case Converter', 'Convert text to dot.case.', t => words(t).join('.').toLowerCase()],
-    ['alternating-case-converter', 'aLtErNaTiNg CaSe Converter', 'Alternate upper and lower case letters.', t => [...t].map((c, i) => i % 2 ? c.toLowerCase() : c.toUpperCase()).join('')],
-    ['inverse-case-converter', 'Inverse Case Converter', 'Swap upper and lower case letters.', t => [...t].map(c => c === c.toUpperCase() ? c.toLowerCase() : c.toUpperCase()).join('')],
-    ['reverse-text', 'Reverse Text', 'Reverse the order of characters.', t => [...t].reverse().join('')],
-    ['reverse-words', 'Reverse Word Order', 'Reverse the order of words.', t => t.trim().split(/\s+/).reverse().join(' ')],
-    ['reverse-lines', 'Reverse Line Order', 'Reverse the order of lines.', t => lines(t).reverse().join('\n')],
-    ['sort-lines-a-z', 'Sort Lines A–Z', 'Sort lines alphabetically.', t => lines(t).sort((a, b) => a.localeCompare(b)).join('\n')],
-    ['sort-lines-z-a', 'Sort Lines Z–A', 'Sort lines in reverse alphabetical order.', t => lines(t).sort((a, b) => b.localeCompare(a)).join('\n')],
-    ['remove-duplicate-lines', 'Remove Duplicate Lines', 'Keep only unique lines.', t => [...new Set(lines(t))].join('\n')],
-    ['remove-empty-lines', 'Remove Empty Lines', 'Delete blank lines.', t => lines(t).filter(l => l.trim()).join('\n')],
-    ['remove-extra-spaces', 'Remove Extra Spaces', 'Collapse repeated spaces and trim lines.', t => t.replace(/[ \t]+/g, ' ').replace(/^ | $/gm, '')],
-    ['remove-line-breaks', 'Remove Line Breaks', 'Join all lines into one paragraph.', t => t.replace(/\s*[\r\n]+\s*/g, ' ').trim()],
-    ['add-line-numbers', 'Add Line Numbers', 'Prefix every line with its number.', t => lines(t).map((l, i) => (i + 1) + '. ' + l).join('\n')],
-    ['randomize-lines', 'Randomize Lines', 'Shuffle the order of lines.', t => { const a = lines(t); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a.join('\n'); }],
-    ['strip-html-tags', 'Strip HTML Tags', 'Remove all HTML tags and keep the text.', t => t.replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi, '').replace(/<[^>]*>/g, '').replace(/\n{3,}/g, '\n\n').trim()],
-    ['remove-accents', 'Remove Accents & Diacritics', 'Convert é, ñ, ü… to plain letters.', t => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '')],
-    ['upside-down-text', 'Upside Down Text Generator', 'Flip text upside down.', t => [...t.toLowerCase()].reverse().map(c => flip[c] || c).join('')],
-    ['leetspeak-converter', 'Leetspeak Converter', 'Convert text to 1337 speak.', t => [...t].map(c => leet[c.toLowerCase()] || c).join('')],
-    ['extract-emails', 'Extract Email Addresses', 'Pull every email address out of text.', t => [...new Set(t.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || [])].join('\n') || 'No email addresses found.'],
-    ['extract-urls', 'Extract URLs', 'Pull every web link out of text.', t => [...new Set(t.match(/https?:\/\/[^\s"'<>)]+/g) || [])].join('\n') || 'No URLs found.'],
-    ['extract-numbers', 'Extract Numbers', 'List every number found in text.', t => (t.match(/-?\d+(?:[.,]\d+)?/g) || []).join('\n') || 'No numbers found.'],
-    ['text-to-hashtags', 'Text to Hashtags', 'Turn keywords or phrases into #hashtags.', t => t.split(/[\n,]+/).map(x => words(x).map(w => w[0].toUpperCase() + w.slice(1)).join('')).filter(Boolean).map(x => '#' + x).join(' ')]
-  ];
-  TX.forEach(x => out.push(T(x[0], x[1], 'Text Tools', 'fa-solid fa-font', x[2], [A('text', 'Your text', 'Paste or type text here…', { rows: 8 })], 'Convert', v => { if (!String(v.text || '').trim()) return err('Please enter some text.'); return pre(x[3](String(v.text))); })));
-
-  return out;
-})(),
-
-/* ---------- 2. FINANCE, TAX & BUSINESS CALCULATORS (USA · India · Europe/UK · Global) ---------- */
-...(function () {
-  'use strict';
-  const { esc, num, opt, bad, fmt, fmtIN, sig, money, err, kv, table, scroll, emi, sched, N, S, A, SEL, T, getRates, CUR, curNote } = globalThis.QTH;
-  const FIN = 'Finance & Business Calculators';
-  const SYMS = ['$', '€', '£', '₹', '¥', 'A$', 'C$', 'CHF ', 'AED '];
-  const SY = SEL('sym', 'Currency symbol', SYMS, '$');
-  const out = [];
-  const push = (...a) => out.push(T(...a));
-
-  /* ===== India ===== */
-  push('emi-calculator', 'EMI Calculator (Home, Car & Personal Loan)', FIN, 'fa-solid fa-indian-rupee-sign', 'Monthly EMI, total interest and a full month-by-month amortization schedule.',
-    [N('p', 'Loan Amount', 'e.g. 2500000'), N('r', 'Annual Interest Rate (%)', 'e.g. 8.5'), N('t', 'Loan Tenure', 'e.g. 20'), SEL('u', 'Tenure Unit', ['Years', 'Months']), SEL('sym', 'Currency symbol', ['₹', '$', '€', '£'], '₹')], 'Calculate EMI',
-    v => {
-      const P = num(v.p), r = num(v.r), t = num(v.t), n = Math.round(v.u === 'Years' ? t * 12 : t);
-      if (bad(P, r, t) || P <= 0 || r < 0 || n <= 0) return err('Enter a positive loan amount, interest rate and tenure.');
-      const e = emi(P, r, n), s = sched(P, r, n, e), tot = e * n;
-      return kv([['Monthly EMI', '<b>' + money(e, v.sym) + '</b>'], ['Principal', money(P, v.sym)], ['Total Interest', money(tot - P, v.sym)], ['Total Payment', money(tot, v.sym)], ['Interest share', fmt((tot - P) / tot * 100, 1) + '%']]) +
-        '<h4 style="margin:14px 0 6px">Amortization Schedule</h4>' + scroll(table(['Month', 'EMI', 'Principal', 'Interest', 'Balance'], s.rows));
-    });
-  push('loan-amortization-schedule', 'Loan Calculator with Amortization Schedule', FIN, 'fa-solid fa-table-list', 'Global loan payment calculator with optional extra monthly payment and full schedule.',
-    [N('p', 'Loan Amount', '20000'), N('r', 'Annual Interest Rate (%)', '6.5'), N('y', 'Term (years)', '5'), N('x', 'Extra Monthly Payment (optional)', '0', { value: 0 }), SY], 'Build Schedule',
-    v => {
-      const P = num(v.p), r = num(v.r), y = num(v.y), x = opt(v.x), n = Math.round(y * 12);
-      if (bad(P, r, y) || P <= 0 || r < 0 || n <= 0) return err('Enter valid loan amount, rate and term.');
-      const e = emi(P, r, n), s = sched(P, r, n * 3, e + x), base = e * n;
-      const paid = s.rows.length;
-      return kv([['Regular monthly payment', '<b>' + money(e, v.sym) + '</b>'], ['Payment with extra', money(e + x, v.sym)], ['Payoff time', paid + ' months (' + fmt(paid / 12, 1) + ' yrs)'], ['Total interest', money(s.ti, v.sym)], ['Interest saved by extra payments', money(Math.max(base - P - s.ti, 0), v.sym)]]) + '<div style="margin-top:12px">' + scroll(table(['Month', 'Payment', 'Principal', 'Interest', 'Balance'], s.rows)) + '</div>';
-    });
-  push('sip-calculator', 'SIP Calculator (Systematic Investment Plan)', FIN, 'fa-solid fa-chart-line', 'Estimate mutual-fund SIP maturity value with optional annual step-up.',
-    [N('m', 'Monthly Investment (₹)', '10000'), N('r', 'Expected Annual Return (%)', '12'), N('y', 'Time Period (years)', '10'), N('s', 'Annual Step-up (%) optional', '0', { value: 0 })], 'Calculate SIP',
-    v => {
-      const m = num(v.m), r = num(v.r), y = num(v.y), s = opt(v.s);
-      if (bad(m, r, y) || m <= 0 || y <= 0) return err('Enter valid monthly amount, return and years.');
-      let bal = 0, inv = 0, cur = m; const i = r / 1200, rows = [];
-      for (let k = 1; k <= Math.round(y * 12); k++) { bal = (bal + cur) * (1 + i); inv += cur; if (k % 12 === 0) { rows.push([k / 12, fmtIN(inv, 0), fmtIN(bal - inv, 0), fmtIN(bal, 0)]); cur *= 1 + s / 100; } }
-      return kv([['Total Invested', '₹' + fmtIN(inv, 0)], ['Estimated Returns', '₹' + fmtIN(bal - inv, 0)], ['Maturity Value', '<b>₹' + fmtIN(bal, 0) + '</b>']]) + '<div style="margin-top:12px">' + scroll(table(['Year', 'Invested', 'Returns', 'Value'], rows)) + '</div><div style="opacity:.7;font-size:.85em;margin-top:6px">Market returns are not guaranteed.</div>';
-    });
-  push('gst-calculator', 'GST Calculator (CGST / SGST / IGST Split)', FIN, 'fa-solid fa-percent', 'Add or remove GST and see the CGST + SGST or IGST breakup.',
-    [N('amt', 'Amount (₹)', '10000'), SEL('rate', 'GST Rate', [['0', '0%'], ['0.25', '0.25%'], ['3', '3%'], ['5', '5%'], ['12', '12%'], ['18', '18%'], ['28', '28%'], ['40', '40%']], '18'), SEL('mode', 'Calculation', [['add', 'Add GST (price is exclusive)'], ['remove', 'Remove GST (price includes GST)']]), SEL('sup', 'Supply type', [['intra', 'Intra-state (CGST + SGST)'], ['inter', 'Inter-state (IGST)']])], 'Calculate GST',
-    v => {
-      const a = num(v.amt), r = num(v.rate); if (bad(a, r) || a < 0) return err('Enter a valid amount.');
-      const net = v.mode === 'add' ? a : a / (1 + r / 100), gst = net * r / 100, tot = net + gst;
-      const rows = [['Net amount', '₹' + fmtIN(net)]];
-      if (v.sup === 'intra') rows.push(['CGST @ ' + sig(r / 2) + '%', '₹' + fmtIN(gst / 2)], ['SGST/UTGST @ ' + sig(r / 2) + '%', '₹' + fmtIN(gst / 2)]); else rows.push(['IGST @ ' + sig(r) + '%', '₹' + fmtIN(gst)]);
-      rows.push(['Total GST', '₹' + fmtIN(gst)], ['Gross amount', '<b>₹' + fmtIN(tot) + '</b>']); return kv(rows);
-    });
-  push('fd-calculator', 'FD Calculator (Fixed Deposit)', FIN, 'fa-solid fa-building-columns', 'Fixed deposit maturity amount and interest earned with selectable compounding.',
-    [N('p', 'Deposit Amount (₹)', '100000'), N('r', 'Interest Rate (% p.a.)', '7'), N('y', 'Years', '5', { value: 5 }), N('mo', 'Extra Months', '0', { value: 0 }), SEL('c', 'Compounding', [['4', 'Quarterly'], ['12', 'Monthly'], ['2', 'Half-yearly'], ['1', 'Yearly']])], 'Calculate FD',
-    v => { const P = num(v.p), r = num(v.r), t = opt(v.y) + opt(v.mo) / 12, n = +v.c; if (bad(P, r) || P <= 0 || t <= 0) return err('Enter valid deposit, rate and tenure.'); const M = P * Math.pow(1 + r / (100 * n), n * t); return kv([['Invested', '₹' + fmtIN(P)], ['Interest Earned', '₹' + fmtIN(M - P)], ['Maturity Amount', '<b>₹' + fmtIN(M) + '</b>'], ['Effective annual yield', fmt((Math.pow(1 + r / (100 * n), n) - 1) * 100, 3) + '%']]); });
-  push('rd-calculator', 'RD Calculator (Recurring Deposit)', FIN, 'fa-solid fa-piggy-bank', 'Recurring deposit maturity with quarterly compounding (Indian bank method).',
-    [N('p', 'Monthly Deposit (₹)', '5000'), N('r', 'Interest Rate (% p.a.)', '6.5'), N('n', 'Tenure (months)', '60', { value: 60 })], 'Calculate RD',
-    v => { const P = num(v.p), r = num(v.r), n = Math.round(num(v.n)); if (bad(P, r, n) || P <= 0 || n <= 0) return err('Enter valid values.'); let M = 0; for (let k = 1; k <= n; k++) M += P * Math.pow(1 + r / 400, (n - k + 1) / 3); const inv = P * n; return kv([['Total Deposited', '₹' + fmtIN(inv)], ['Interest Earned', '₹' + fmtIN(M - inv)], ['Maturity Value', '<b>₹' + fmtIN(M) + '</b>']]); });
-  push('ppf-calculator', 'PPF Calculator (Public Provident Fund)', FIN, 'fa-solid fa-vault', 'Year-wise PPF balance with annual compounding (minimum 15-year lock-in).',
-    [N('p', 'Yearly Investment (₹, max 1,50,000)', '150000'), N('r', 'Interest Rate (% p.a.)', '7.1', { value: 7.1 }), N('y', 'Years (15 minimum)', '15', { value: 15 })], 'Calculate PPF',
-    v => { const P = num(v.p), r = num(v.r), y = Math.round(num(v.y)); if (bad(P, r, y) || P <= 0 || y < 15) return err('PPF needs a positive deposit and tenure of at least 15 years.'); if (P > 150000) return err('PPF annual deposit limit is ₹1,50,000.'); let b = 0; const rows = []; for (let k = 1; k <= y; k++) { b = (b + P) * (1 + r / 100); rows.push([k, fmtIN(P * k, 0), fmtIN(b, 0)]); } return kv([['Total Invested', '₹' + fmtIN(P * y, 0)], ['Interest Earned', '₹' + fmtIN(b - P * y, 0)], ['Maturity Value', '<b>₹' + fmtIN(b, 0) + '</b>']]) + '<div style="margin-top:12px">' + scroll(table(['Year', 'Invested', 'Balance'], rows)) + '</div><div style="opacity:.7;font-size:.85em">Assumes deposit by the 5th of April each year. PPF rate is set quarterly by the Government.</div>'; });
-  push('epf-calculator', 'EPF Calculator (Provident Fund Estimator)', FIN, 'fa-solid fa-piggy-bank', 'Estimate EPF corpus at retirement from basic salary, hikes and interest rate.',
-    [N('b', 'Monthly Basic + DA (₹)', '30000'), N('bal', 'Current EPF Balance (₹)', '0', { value: 0 }), N('y', 'Years to Retirement', '25'), N('h', 'Expected Yearly Salary Hike (%)', '6', { value: 6 }), N('r', 'EPF Interest Rate (%)', '8.25', { value: 8.25 })], 'Estimate EPF',
-    v => { const b = num(v.b), bal0 = opt(v.bal), y = Math.round(num(v.y)), h = opt(v.h), r = num(v.r); if (bad(b, y, r) || b <= 0 || y <= 0) return err('Enter valid values.'); let bal = bal0, inv = 0; for (let k = 0; k < y; k++) { const bm = b * Math.pow(1 + h / 100, k), ee = 0.12 * bm, er = 0.12 * bm - 0.0833 * Math.min(bm, 15000); for (let m = 0; m < 12; m++) { bal += bal * r / 1200; bal += ee + er; inv += ee + er; } } return kv([['Contributions (employee + employer EPF)', '₹' + fmtIN(inv, 0)], ['Interest', '₹' + fmtIN(bal - bal0 - inv, 0)], ['Estimated Corpus', '<b>₹' + fmtIN(bal, 0) + '</b>']]) + '<div style="opacity:.7;font-size:.85em">Employer share: 12% of wages minus 8.33% EPS (wage ceiling ₹15,000). Estimate only.</div>'; });
-  push('gratuity-calculator', 'Gratuity Calculator (India)', FIN, 'fa-solid fa-award', 'Estimate gratuity payable under the Payment of Gratuity Act.',
-    [N('s', 'Last Drawn Basic + DA (₹/month)', '50000'), N('y', 'Years of Service', '8'), N('m', 'Extra Months', '0', { value: 0 }), SEL('c', 'Covered under Gratuity Act?', [['26', 'Yes (÷ 26 days)'], ['30', 'No (÷ 30 days)']])], 'Calculate Gratuity',
-    v => { const s = num(v.s), y = num(v.y), m = opt(v.m), d = +v.c; if (bad(s, y) || s <= 0 || y < 0) return err('Enter valid values.'); const yrs = Math.floor(y) + (m >= 6 ? 1 : 0); const g = s * 15 / d * yrs; return kv([['Years counted', yrs], ['Gratuity', '<b>₹' + fmtIN(g, 0) + '</b>'], ['Tax-exempt limit (private sector)', '₹20,00,000']]) + '<div style="opacity:.7;font-size:.85em">Formula: (last salary × 15 × years) ÷ ' + d + '. Eligibility usually needs 5+ years of service.</div>'; });
-  const LK = [['1', 'Ones', 1], ['1e3', 'Thousand', 1e3], ['1e5', 'Lakh', 1e5], ['1e6', 'Million', 1e6], ['1e7', 'Crore', 1e7], ['1e9', 'Billion / Arab', 1e9], ['1e11', 'Kharab', 1e11], ['1e12', 'Trillion', 1e12]];
-  push('lakh-crore-converter', 'Indian Rupee Lakh / Crore to Million / Billion Converter', FIN, 'fa-solid fa-arrow-right-arrow-left', 'Convert between lakh, crore, million, billion and plain numbers.',
-    [N('v', 'Amount', '25'), SEL('u', 'Unit', LK.map(x => [x[0], x[1]]), '1e5')], 'Convert',
-    v => { const a = num(v.v), f = +v.u; if (bad(a)) return err('Enter a valid number.'); const base = a * f; return kv(LK.map(x => [x[1], sig(base / x[2])]).concat([['Indian format', '₹' + fmtIN(base, 0)], ['International format', fmt(base, 0)]])); });
-
-  /* ===== Europe & UK ===== */
-  const VAT = { AT: ['Austria', 20, 10, 13], BE: ['Belgium', 21, 12, 6], BG: ['Bulgaria', 20, 9], HR: ['Croatia', 25, 13, 5], CY: ['Cyprus', 19, 9, 5], CZ: ['Czechia', 21, 12], DK: ['Denmark', 25], EE: ['Estonia', 24, 13, 9], FI: ['Finland', 25.5, 14, 10], FR: ['France', 20, 10, 5.5], DE: ['Germany', 19, 7], GR: ['Greece', 24, 13, 6], HU: ['Hungary', 27, 18, 5], IE: ['Ireland', 23, 13.5, 9], IT: ['Italy', 22, 10, 5], LV: ['Latvia', 21, 12, 5], LT: ['Lithuania', 21, 9, 5], LU: ['Luxembourg', 17, 14, 8], MT: ['Malta', 18, 7, 5], NL: ['Netherlands', 21, 9], PL: ['Poland', 23, 8, 5], PT: ['Portugal', 23, 13, 6], RO: ['Romania', 21, 11], SK: ['Slovakia', 23, 19, 5], SI: ['Slovenia', 22, 9.5, 5], ES: ['Spain', 21, 10, 4], SE: ['Sweden', 25, 12, 6], GB: ['United Kingdom', 20, 5], NO: ['Norway', 25, 15, 12], CH: ['Switzerland', 8.1, 3.8, 2.6] };
-  push('eu-uk-vat-calculator', 'EU & UK VAT Calculator (Multi-Country)', FIN, 'fa-solid fa-euro-sign', 'Add or remove VAT using standard and reduced rates for EU countries, the UK, Norway and Switzerland.',
-    [N('amt', 'Amount', '100'), SEL('c', 'Country', Object.keys(VAT).map(k => [k, VAT[k][0]]), 'DE'), SEL('tier', 'Rate type', [['1', 'Standard rate'], ['2', 'Reduced rate (1st)'], ['3', 'Reduced / super-reduced (2nd)'], ['0', 'Zero rate']]), SEL('mode', 'Calculation', [['add', 'Add VAT (net → gross)'], ['remove', 'Remove VAT (gross → net)']]), N('custom', 'Custom VAT rate % (optional override)', '')], 'Calculate VAT',
-    v => {
-      const a = num(v.amt), d = VAT[v.c]; if (bad(a) || !d) return err('Enter a valid amount.');
-      let r = isFinite(num(v.custom)) ? num(v.custom) : (v.tier === '0' ? 0 : d[+v.tier]); if (r === undefined) return err(d[0] + ' has no ' + 'such rate tier. Pick another tier.');
-      const net = v.mode === 'add' ? a : a / (1 + r / 100), vat = net * r / 100;
-      return kv([['Country', esc(d[0])], ['VAT rate', r + '%'], ['Net', fmt(net)], ['VAT', fmt(vat)], ['Gross', '<b>' + fmt(net + vat) + '</b>']]) + '<div style="opacity:.7;font-size:.85em;margin-top:6px">' + esc(d[0]) + ' rates: standard ' + d[1] + '%' + (d.length > 2 ? ', reduced ' + d.slice(2).join('% / ') + '%' : '') + '. Rates change — verify with your tax authority.</div>';
-    });
-  const IL = { AD: 24, AE: 23, AL: 28, AT: 20, AZ: 28, BA: 20, BE: 16, BG: 22, BH: 22, BR: 29, BY: 28, CH: 21, CR: 22, CY: 28, CZ: 24, DE: 22, DK: 18, DO: 28, EE: 20, EG: 29, ES: 24, FI: 18, FO: 18, FR: 27, GB: 22, GE: 22, GI: 23, GL: 18, GR: 27, GT: 28, HR: 21, HU: 28, IE: 22, IL: 23, IQ: 23, IS: 26, IT: 27, JO: 30, KW: 30, KZ: 20, LB: 28, LC: 32, LI: 21, LT: 20, LU: 20, LV: 21, MC: 27, MD: 24, ME: 22, MK: 19, MR: 27, MT: 31, MU: 30, NL: 18, NO: 15, PK: 24, PL: 28, PS: 29, PT: 25, QA: 29, RO: 24, RS: 22, SA: 24, SE: 24, SI: 19, SK: 24, SM: 27, TN: 24, TR: 26, UA: 29, VA: 22, VG: 24, XK: 20 };
-  push('iban-bic-validator', 'IBAN & BIC Validator / Formatter', FIN, 'fa-solid fa-building-columns', 'Validate IBAN checksum and country length, format in groups of four, and check a BIC/SWIFT code.',
-    [S('iban', 'IBAN', 'DE89 3704 0044 0532 0130 00'), S('bic', 'BIC / SWIFT (optional)', 'COBADEFFXXX')], 'Validate',
-    v => {
-      const raw = String(v.iban || '').replace(/\s+/g, '').toUpperCase(); const rows = [];
-      if (raw) {
-        const cc = raw.slice(0, 2); let ok = /^[A-Z]{2}\d{2}[A-Z0-9]+$/.test(raw), why = '';
-        if (!ok) why = 'Wrong format'; else if (!IL[cc]) { ok = false; why = 'Unknown country code ' + cc; } else if (IL[cc] !== raw.length) { ok = false; why = cc + ' IBANs have ' + IL[cc] + ' characters (you have ' + raw.length + ')'; }
-        if (ok) { const s = (raw.slice(4) + raw.slice(0, 4)).replace(/[A-Z]/g, c => c.charCodeAt(0) - 55); let rem = 0; for (let i = 0; i < s.length; i += 7) rem = parseInt(rem + s.substr(i, 7), 10) % 97; if (rem !== 1) { ok = false; why = 'Checksum (mod-97) failed'; } }
-        rows.push(['IBAN valid?', ok ? '✅ Yes' : '❌ No — ' + why], ['Formatted', raw.replace(/(.{4})/g, '$1 ').trim()], ['Country', cc], ['Check digits', raw.slice(2, 4)], ['Length', raw.length], ['BBAN', raw.slice(4)]);
-      }
-      const b = String(v.bic || '').replace(/\s+/g, '').toUpperCase();
-      if (b) rows.push(['BIC valid?', /^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$/.test(b) ? '✅ Yes' : '❌ No'], ['BIC bank / country / location', /^[A-Z]{6}/.test(b) ? b.slice(0, 4) + ' / ' + b.slice(4, 6) + ' / ' + b.slice(6, 8) : '—']);
-      return rows.length ? kv(rows) : err('Enter an IBAN or BIC.');
-    });
-  const cOpts = CUR.map(c => ({ value: c[0], label: c[0] + ' — ' + c[1] }));
-  push('exchange-rate-estimator', 'Currency / Exchange Rate Estimator', FIN, 'fa-solid fa-money-bill-transfer', 'Estimate any exchange rate with a bank-margin/fee option.',
-    [N('a', 'Amount', '1000', { value: 1000 }), SEL('f', 'From', cOpts, 'GBP'), SEL('t', 'To', cOpts, 'EUR'), N('m', 'Bank / provider margin (%)', '0', { value: 0 })], 'Estimate',
-    async v => { const a = num(v.a), m = opt(v.m); if (bad(a)) return err('Enter a valid amount.'); const r = await getRates(); const rate = r.rates[v.t] / r.rates[v.f], eff = rate * (1 - m / 100); return kv([['Mid-market rate', '1 ' + v.f + ' = ' + sig(rate) + ' ' + v.t], ['Effective rate (after margin)', sig(eff)], ['You receive', '<b>' + fmt(a * eff) + ' ' + v.t + '</b>'], ['Margin cost', fmt(a * rate - a * eff) + ' ' + v.t]]) + curNote(r); });
-  push('multi-currency-estimator', 'Real-time Multi-Currency Estimator', FIN, 'fa-solid fa-earth-americas', 'See one amount in 27 currencies at once (live rates, offline fallback).',
-    [N('a', 'Amount', '100', { value: 100 }), SEL('f', 'Base currency', cOpts, 'USD')], 'Show All',
-    async v => { const a = num(v.a); if (bad(a)) return err('Enter a valid amount.'); const r = await getRates(); return scroll(table(['Currency', 'Amount'], CUR.map(c => [c[0] + ' — ' + c[1], fmt(a * r.rates[c[0]] / r.rates[v.f], c[0] === 'JPY' || c[0] === 'KRW' || c[0] === 'IDR' ? 0 : 2)]))) + curNote(r); });
-  push('kwh-energy-cost-calculator', 'Energy Cost Calculator (kWh)', FIN, 'fa-solid fa-bolt', 'Convert watts and daily usage into kWh and running cost per day, month and year.',
-    [N('w', 'Appliance Power (Watts)', '1500'), N('h', 'Hours used per day', '3'), N('p', 'Price per kWh', '0.28'), N('d', 'Days per month', '30', { value: 30 }), SEL('sym', 'Currency symbol', SYMS, '€')], 'Calculate Cost',
-    v => { const w = num(v.w), h = num(v.h), p = num(v.p), d = num(v.d); if (bad(w, h, p, d) || w < 0 || h < 0 || h > 24) return err('Enter valid watts (≥0), hours (0–24) and price.'); const kd = w * h / 1000; return kv([['Energy per day', fmt(kd, 3) + ' kWh'], ['Energy per month', fmt(kd * d, 2) + ' kWh'], ['Cost per day', money(kd * p, v.sym)], ['Cost per month', money(kd * p * d, v.sym)], ['Cost per year', '<b>' + money(kd * p * 365, v.sym) + '</b>'], ['CO₂ per year (~0.4 kg/kWh)', fmt(kd * 365 * 0.4, 0) + ' kg']]); });
-  push('appliance-runtime-calculator', 'Appliance Run-time Calculator', FIN, 'fa-solid fa-battery-half', 'How long an appliance can run on a battery capacity or on a given electricity budget.',
-    [N('w', 'Appliance Power (Watts)', '100'), SEL('m', 'Calculate from', [['wh', 'Battery capacity (Wh)'], ['ah', 'Battery (Ah × Volts)'], ['money', 'Electricity budget']]), N('c', 'Capacity (Wh) / Ah / Budget amount', '1000'), N('vv', 'Battery Volts (Ah mode only)', '12', { value: 12 }), N('e', 'Efficiency / inverter (%)', '85', { value: 85 }), N('p', 'Price per kWh (budget mode)', '0.25', { value: 0.25 })], 'Calculate Run-time',
-    v => { const w = num(v.w), c = num(v.c), e = opt(v.e) / 100 || 1; if (bad(w, c) || w <= 0 || c <= 0) return err('Enter valid power and capacity.'); let wh; if (v.m === 'wh') wh = c * e; else if (v.m === 'ah') wh = c * (num(v.vv) || 12) * e; else { const p = num(v.p); if (bad(p) || p <= 0) return err('Enter a price per kWh.'); wh = c / p * 1000; } const h = wh / w; return kv([['Usable energy', fmt(wh, 1) + ' Wh'], ['Run-time', '<b>' + fmt(h, 2) + ' hours</b>'], ['≈', Math.floor(h / 24) + ' d ' + Math.floor(h % 24) + ' h ' + Math.round((h % 1) * 60) + ' m']]); });
-  push('electricity-bill-calculator', 'Electricity Bill Calculator', FIN, 'fa-solid fa-lightbulb', 'Estimate a bill from meter readings, unit rate, fixed charge and tax.',
-    [N('a', 'Previous Meter Reading', '12000'), N('b', 'Current Meter Reading', '12350'), N('r', 'Rate per unit', '7.5'), N('f', 'Fixed / service charge', '120', { value: 0 }), N('t', 'Tax / VAT / duty (%)', '5', { value: 0 }), SEL('sym', 'Currency symbol', SYMS, '₹')], 'Calculate Bill',
-    v => { const a = num(v.a), b = num(v.b), r = num(v.r); if (bad(a, b, r) || b < a) return err('Current reading must be ≥ previous reading.'); const u = b - a, e = u * r, sub = e + opt(v.f), tax = sub * opt(v.t) / 100; return kv([['Units consumed', fmt(u, 2) + ' kWh'], ['Energy charge', money(e, v.sym)], ['Fixed charge', money(opt(v.f), v.sym)], ['Tax', money(tax, v.sym)], ['Total bill', '<b>' + money(sub + tax, v.sym) + '</b>']]); });
-
-  /* ===== USA ===== */
-  const ST = { AL: ['Alabama', 4], AK: ['Alaska', 0], AZ: ['Arizona', 5.6], AR: ['Arkansas', 6.5], CA: ['California', 7.25], CO: ['Colorado', 2.9], CT: ['Connecticut', 6.35], DE: ['Delaware', 0], DC: ['District of Columbia', 6], FL: ['Florida', 6], GA: ['Georgia', 4], HI: ['Hawaii', 4], ID: ['Idaho', 6], IL: ['Illinois', 6.25], IN: ['Indiana', 7], IA: ['Iowa', 6], KS: ['Kansas', 6.5], KY: ['Kentucky', 6], LA: ['Louisiana', 5], ME: ['Maine', 5.5], MD: ['Maryland', 6], MA: ['Massachusetts', 6.25], MI: ['Michigan', 6], MN: ['Minnesota', 6.875], MS: ['Mississippi', 7], MO: ['Missouri', 4.225], MT: ['Montana', 0], NE: ['Nebraska', 5.5], NV: ['Nevada', 6.85], NH: ['New Hampshire', 0], NJ: ['New Jersey', 6.625], NM: ['New Mexico', 4.875], NY: ['New York', 4], NC: ['North Carolina', 4.75], ND: ['North Dakota', 5], OH: ['Ohio', 5.75], OK: ['Oklahoma', 4.5], OR: ['Oregon', 0], PA: ['Pennsylvania', 6], RI: ['Rhode Island', 7], SC: ['South Carolina', 6], SD: ['South Dakota', 4.2], TN: ['Tennessee', 7], TX: ['Texas', 6.25], UT: ['Utah', 4.85], VT: ['Vermont', 6], VA: ['Virginia', 4.3], WA: ['Washington', 6.5], WV: ['West Virginia', 6], WI: ['Wisconsin', 5], WY: ['Wyoming', 4] };
-  push('us-state-sales-tax-calculator', 'US State Sales Tax Calculator', FIN, 'fa-solid fa-receipt', 'Sales tax and total price by state (state base rate + your local rate).',
-    [N('a', 'Price before tax ($)', '100'), SEL('s', 'State', Object.keys(ST).map(k => [k, ST[k][0] + ' (' + ST[k][1] + '%)']), 'CA'), N('l', 'Local / city / county rate (%) optional', '0', { value: 0 })], 'Calculate Tax',
-    v => { const a = num(v.a), s = ST[v.s]; if (bad(a) || !s) return err('Enter a valid price.'); const r = s[1] + opt(v.l), t = a * r / 100; return kv([['State base rate', s[1] + '%'], ['Combined rate', fmt(r, 3) + '%'], ['Sales tax', '$' + fmt(t)], ['Total', '<b>$' + fmt(a + t) + '</b>']]) + '<div style="opacity:.7;font-size:.85em">State base rates only; most localities add 0–5%. Some states exempt groceries/clothing.</div>'; });
-  push('tip-split-bill-calculator', 'Tip & Split Bill Calculator', FIN, 'fa-solid fa-utensils', 'Calculate tip, total and each person\'s share.',
-    [N('b', 'Bill Amount', '85.50'), N('t', 'Tip (%)', '18', { value: 18 }), N('n', 'Number of People', '4', { value: 2 }), SY], 'Split Bill',
-    v => { const b = num(v.b), t = num(v.t), n = Math.max(1, Math.round(num(v.n))); if (bad(b, t, n) || b < 0) return err('Enter valid bill, tip and people.'); const tip = b * t / 100; return kv([['Tip', money(tip, v.sym)], ['Total', money(b + tip, v.sym)], ['Tip per person', money(tip / n, v.sym)], ['Each person pays', '<b>' + money((b + tip) / n, v.sym) + '</b>']]); });
-  push('hourly-to-salary-calculator', 'Hourly to Salary Calculator', FIN, 'fa-solid fa-money-check-dollar', 'Convert an hourly wage to daily, weekly, monthly and annual pay (and back).',
-    [N('h', 'Hourly Rate', '25'), N('hw', 'Hours per week', '40', { value: 40 }), N('w', 'Weeks per year', '52', { value: 52 }), N('pto', 'Unpaid weeks off', '0', { value: 0 }), SY], 'Calculate Salary',
-    v => { const h = num(v.h), hw = num(v.hw), w = num(v.w) - opt(v.pto); if (bad(h, hw, w) || h < 0 || w <= 0) return err('Enter valid values.'); const y = h * hw * w; return kv([['Hourly', money(h, v.sym)], ['Daily (8h)', money(h * 8, v.sym)], ['Weekly', money(h * hw, v.sym)], ['Bi-weekly', money(h * hw * 2, v.sym)], ['Monthly', money(y / 12, v.sym)], ['Annual', '<b>' + money(y, v.sym) + '</b>']]); });
-  push('salary-to-hourly-calculator', 'Salary to Hourly Calculator', FIN, 'fa-solid fa-clock', 'Turn an annual salary into an hourly wage.',
-    [N('s', 'Annual Salary', '60000'), N('hw', 'Hours per week', '40', { value: 40 }), N('w', 'Weeks per year', '52', { value: 52 }), SY], 'Calculate Hourly',
-    v => { const s = num(v.s), hw = num(v.hw), w = num(v.w); if (bad(s, hw, w) || hw <= 0 || w <= 0) return err('Enter valid values.'); return kv([['Hourly', '<b>' + money(s / (hw * w), v.sym) + '</b>'], ['Daily (8h)', money(s / (hw * w) * 8, v.sym)], ['Weekly', money(s / w, v.sym)], ['Monthly', money(s / 12, v.sym)]]); });
-  push('mortgage-payment-estimator', 'Mortgage Payment Estimator (PITI)', FIN, 'fa-solid fa-house', 'Monthly mortgage payment with property tax, insurance, HOA and PMI estimate.',
-    [N('price', 'Home Price ($)', '450000'), N('down', 'Down Payment (%)', '20', { value: 20 }), N('rate', 'Interest Rate (%)', '6.5'), N('years', 'Loan Term (years)', '30', { value: 30 }), N('tax', 'Property Tax (% of price / year)', '1.1', { value: 1.1 }), N('ins', 'Home Insurance ($/year)', '1500', { value: 1500 }), N('hoa', 'HOA ($/month)', '0', { value: 0 })], 'Estimate Payment',
-    v => { const p = num(v.price), d = num(v.down), r = num(v.rate), y = num(v.years); if (bad(p, d, r, y) || p <= 0 || y <= 0 || d < 0 || d > 100) return err('Enter valid price, down payment, rate and term.'); const L = p * (1 - d / 100), pi = L > 0 ? emi(L, r, y * 12) : 0, tx = p * opt(v.tax) / 1200, ins = opt(v.ins) / 12, pmi = d < 20 ? L * 0.005 / 12 : 0, tot = pi + tx + ins + opt(v.hoa) + pmi; return kv([['Loan amount', '$' + fmt(L)], ['Principal & interest', '$' + fmt(pi)], ['Property tax', '$' + fmt(tx)], ['Home insurance', '$' + fmt(ins)], ['HOA', '$' + fmt(opt(v.hoa))], ['PMI (est. 0.5%/yr if down <20%)', '$' + fmt(pmi)], ['Total monthly payment', '<b>$' + fmt(tot) + '</b>'], ['Total interest over loan', '$' + fmt(pi * y * 12 - L)]]); });
-  push('auto-loan-calculator', 'Auto Loan Calculator', FIN, 'fa-solid fa-car', 'Monthly car payment including sales tax, down payment and trade-in.',
-    [N('p', 'Vehicle Price ($)', '32000'), N('d', 'Down Payment ($)', '3000', { value: 0 }), N('tr', 'Trade-in Value ($)', '0', { value: 0 }), N('tax', 'Sales Tax (%)', '7', { value: 0 }), N('r', 'APR (%)', '6.9'), N('m', 'Term (months)', '60', { value: 60 })], 'Calculate Payment',
-    v => { const p = num(v.p), r = num(v.r), m = Math.round(num(v.m)); if (bad(p, r, m) || p <= 0 || m <= 0) return err('Enter valid price, APR and term.'); const L = Math.max(p * (1 + opt(v.tax) / 100) - opt(v.d) - opt(v.tr), 0), e = L ? emi(L, r, m) : 0; return kv([['Amount financed', '$' + fmt(L)], ['Monthly payment', '<b>$' + fmt(e) + '</b>'], ['Total interest', '$' + fmt(e * m - L)], ['Total cost (incl. down)', '$' + fmt(e * m + opt(v.d) + opt(v.tr))]]); });
-  push('car-lease-calculator', 'Car Lease Calculator', FIN, 'fa-solid fa-car-side', 'Estimate monthly lease payment from cap cost, residual value and money factor.',
-    [N('c', 'Negotiated Price / Cap Cost ($)', '35000'), N('d', 'Down Payment ($)', '2000', { value: 0 }), N('rv', 'Residual Value (% of MSRP)', '58', { value: 58 }), N('msrp', 'MSRP ($)', '36000'), N('apr', 'Equivalent APR (%)', '5.5'), N('n', 'Lease Term (months)', '36', { value: 36 }), N('tax', 'Sales Tax (%)', '7', { value: 0 })], 'Calculate Lease',
-    v => { const c = num(v.c) - opt(v.d), m = num(v.msrp), rvp = num(v.rv), apr = num(v.apr), n = Math.round(num(v.n)); if (bad(c, m, rvp, apr, n) || n <= 0) return err('Enter valid values.'); const res = m * rvp / 100, dep = (c - res) / n, mf = apr / 2400, fin = (c + res) * mf, base = dep + fin, tax = base * opt(v.tax) / 100; return kv([['Residual value', '$' + fmt(res)], ['Depreciation / month', '$' + fmt(dep)], ['Finance charge / month', '$' + fmt(fin)], ['Money factor', mf.toFixed(5)], ['Sales tax / month', '$' + fmt(tax)], ['Monthly lease payment', '<b>$' + fmt(base + tax) + '</b>']]); });
-  push('credit-card-payoff-calculator', 'Credit Card Payoff Calculator', FIN, 'fa-solid fa-credit-card', 'See how long it takes to clear a balance and how much interest you will pay.',
-    [N('b', 'Card Balance', '5000'), N('r', 'APR (%)', '22.9'), N('p', 'Monthly Payment', '200'), SY], 'Calculate Payoff',
-    v => { let b = num(v.b), r = num(v.r), p = num(v.p); if (bad(b, r, p) || b <= 0 || p <= 0) return err('Enter valid balance, APR and payment.'); const mi = r / 1200; if (p <= b * mi) return err('Your payment must exceed the monthly interest (' + money(b * mi, v.sym) + ') or the balance never falls.'); let m = 0, ti = 0; while (b > 0.005 && m < 1200) { const i = b * mi; ti += i; b = b + i - Math.min(p, b + i); m++; } return kv([['Months to pay off', m + ' (' + Math.floor(m / 12) + ' yr ' + (m % 12) + ' mo)'], ['Total interest', money(ti, v.sym)], ['Total paid', '<b>' + money(num(v.b) + ti, v.sym) + '</b>']]); });
-  push('retirement-401k-ira-calculator', '401(k) / IRA Retirement Growth Calculator', FIN, 'fa-solid fa-umbrella-beach', 'Project 401(k) or IRA balance with employer match, yearly raises and returns.',
-    [N('bal', 'Current Balance ($)', '25000', { value: 0 }), N('c', 'Your Monthly Contribution ($)', '800'), N('m', 'Employer Match / month ($)', '300', { value: 0 }), N('r', 'Expected Annual Return (%)', '7', { value: 7 }), N('y', 'Years to Retirement', '30'), N('g', 'Yearly Contribution Increase (%)', '2', { value: 0 })], 'Project Growth',
-    v => { let b = opt(v.bal), c = num(v.c), m = opt(v.m), r = num(v.r), y = Math.round(num(v.y)), g = opt(v.g); if (bad(c, r, y) || y <= 0) return err('Enter valid values.'); let inv = b; const rows = []; for (let k = 1; k <= y; k++) { for (let i = 0; i < 12; i++) { b = b * (1 + r / 1200) + c + m; inv += c + m; } c *= 1 + g / 100; m *= 1 + g / 100; if (k % 5 === 0 || k === y) rows.push([k, fmt(inv, 0), fmt(b, 0)]); } return kv([['Total contributed', '$' + fmt(inv, 0)], ['Investment growth', '$' + fmt(b - inv, 0)], ['Projected balance', '<b>$' + fmt(b, 0) + '</b>']]) + '<div style="margin-top:10px">' + table(['Year', 'Contributed', 'Balance'], rows) + '</div><div style="opacity:.7;font-size:.85em">2025 IRS limits: 401(k) $23,500; IRA $7,000. Projections are not guarantees.</div>'; });
-  push('india-income-tax-calculator', 'India Income Tax Calculator (New Regime, FY 2025-26)', FIN, 'fa-solid fa-file-invoice-dollar', 'Estimate income tax under the new regime slabs with rebate and 4% cess.',
-    [N('i', 'Annual Salary / Income (₹)', '1500000'), N('sd', 'Standard Deduction (₹)', '75000', { value: 75000 })], 'Calculate Tax',
-    v => { const gi = num(v.i); if (bad(gi) || gi < 0) return err('Enter a valid income.'); const ti = Math.max(gi - opt(v.sd), 0); const sl = [[400000, 0], [800000, .05], [1200000, .10], [1600000, .15], [2000000, .20], [2400000, .25], [Infinity, .30]]; let tax = 0, prev = 0; const rows = []; for (const [lim, rt] of sl) { if (ti > prev) { const part = Math.min(ti, lim) - prev; tax += part * rt; rows.push([fmtIN(prev, 0) + ' – ' + (lim === Infinity ? 'above' : fmtIN(lim, 0)), (rt * 100) + '%', fmtIN(part * rt, 0)]); } prev = lim; } if (ti <= 1200000) tax = 0; const cess = tax * 0.04; return kv([['Taxable income', '₹' + fmtIN(ti, 0)], ['Tax (before cess)', '₹' + fmtIN(tax, 0)], ['Health & education cess 4%', '₹' + fmtIN(cess, 0)], ['Total tax', '<b>₹' + fmtIN(tax + cess, 0) + '</b>'], ['Monthly', '₹' + fmtIN((tax + cess) / 12, 0)]]) + '<div style="margin-top:8px">' + table(['Slab', 'Rate', 'Tax'], rows) + '</div><div style="opacity:.7;font-size:.85em">Indicative only (rebate u/s 87A up to ₹12L taxable income; marginal relief, surcharge ignored).</div>'; });
-
-  /* ===== Global ===== */
-  push('roi-calculator', 'ROI Calculator (Return on Investment)', FIN, 'fa-solid fa-chart-pie', 'Calculate ROI and annualized return on any investment.',
-    [N('i', 'Amount Invested', '10000'), N('f', 'Final Value', '14500'), N('y', 'Years held (optional)', '3'), SY], 'Calculate ROI',
-    v => { const i = num(v.i), f = num(v.f), y = num(v.y); if (bad(i, f) || i <= 0) return err('Enter valid invested and final amounts.'); const roi = (f - i) / i * 100, rows = [['Gain / loss', money(f - i, v.sym)], ['ROI', '<b>' + fmt(roi) + '%</b>']]; if (isFinite(y) && y > 0 && f > 0) rows.push(['Annualized (CAGR)', fmt((Math.pow(f / i, 1 / y) - 1) * 100) + '%']); return kv(rows); });
-  push('cagr-calculator', 'CAGR Calculator', FIN, 'fa-solid fa-arrow-trend-up', 'Compound annual growth rate between a start and end value.',
-    [N('s', 'Beginning Value', '10000'), N('e', 'Ending Value', '25000'), N('y', 'Number of Years', '5')], 'Calculate CAGR',
-    v => { const s = num(v.s), e = num(v.e), y = num(v.y); if (bad(s, e, y) || s <= 0 || e <= 0 || y <= 0) return err('All values must be positive.'); const c = Math.pow(e / s, 1 / y) - 1; return kv([['CAGR', '<b>' + fmt(c * 100, 3) + '%</b>'], ['Total growth', fmt((e / s - 1) * 100) + '%'], ['Absolute gain', fmt(e - s)]]); });
-  push('compound-interest-calculator', 'Compound Interest Calculator', FIN, 'fa-solid fa-sack-dollar', 'Future value with compounding frequency and optional monthly deposits.',
-    [N('p', 'Principal', '10000'), N('r', 'Annual Interest Rate (%)', '7'), N('y', 'Years', '10'), SEL('n', 'Compounding', [['365', 'Daily'], ['12', 'Monthly'], ['4', 'Quarterly'], ['2', 'Half-yearly'], ['1', 'Yearly']], '12'), N('m', 'Monthly Deposit (optional)', '0', { value: 0 }), SY], 'Calculate',
-    v => { const P = num(v.p), r = num(v.r) / 100, y = num(v.y), n = +v.n, m = opt(v.m); if (bad(P, r, y) || P < 0 || y <= 0) return err('Enter valid values.'); let b = P; const rows = []; const steps = Math.round(y * 12); const g = Math.pow(1 + r / n, n / 12); for (let k = 1; k <= steps; k++) { b = b * g + m; if (k % 12 === 0) rows.push([k / 12, money(P + m * k, v.sym), money(b, v.sym)]); } const inv = P + m * steps; return kv([['Total deposited', money(inv, v.sym)], ['Interest earned', money(b - inv, v.sym)], ['Future value', '<b>' + money(b, v.sym) + '</b>']]) + '<div style="margin-top:10px">' + scroll(table(['Year', 'Deposited', 'Balance'], rows)) + '</div>'; });
-  push('simple-interest-calculator', 'Simple Interest Calculator', FIN, 'fa-solid fa-percent', 'Simple interest and total amount for a principal, rate and time.',
-    [N('p', 'Principal', '5000'), N('r', 'Rate (% per year)', '6'), N('t', 'Time (years)', '3'), SY], 'Calculate',
-    v => { const p = num(v.p), r = num(v.r), t = num(v.t); if (bad(p, r, t)) return err('Enter valid values.'); const i = p * r * t / 100; return kv([['Interest', money(i, v.sym)], ['Total amount', '<b>' + money(p + i, v.sym) + '</b>']]); });
-  push('discount-sale-price-calculator', 'Discount & Sale Price Calculator', FIN, 'fa-solid fa-tags', 'Final price after one or two successive discounts, plus tax.',
-    [N('p', 'Original Price', '120'), N('d', 'Discount (%)', '25'), N('d2', 'Extra Discount (%) optional', '0', { value: 0 }), N('t', 'Sales Tax / VAT (%) optional', '0', { value: 0 }), SY], 'Calculate Price',
-    v => { const p = num(v.p), d = num(v.d); if (bad(p, d)) return err('Enter valid price and discount.'); const a = p * (1 - d / 100), b = a * (1 - opt(v.d2) / 100), tx = b * opt(v.t) / 100; return kv([['After discount', money(a, v.sym)], ['After extra discount', money(b, v.sym)], ['You save', money(p - b, v.sym) + ' (' + fmt((p - b) / p * 100, 1) + '%)'], ['Tax', money(tx, v.sym)], ['Final price', '<b>' + money(b + tx, v.sym) + '</b>']]); });
-  push('margin-markup-calculator', 'Margin & Markup Calculator', FIN, 'fa-solid fa-scale-balanced', 'Find gross margin and markup from cost and selling price.',
-    [N('c', 'Cost', '40'), N('s', 'Selling Price', '65'), SY], 'Calculate',
-    v => { const c = num(v.c), s = num(v.s); if (bad(c, s) || c < 0 || s <= 0) return err('Enter valid cost and price.'); return kv([['Profit', money(s - c, v.sym)], ['Gross margin', '<b>' + fmt((s - c) / s * 100) + '%</b>'], ['Markup', '<b>' + fmt(c ? (s - c) / c * 100 : NaN) + '%</b>']]); });
-  push('markup-price-calculator', 'Selling Price from Margin or Markup', FIN, 'fa-solid fa-tag', 'Set a selling price that hits a target margin or markup.',
-    [N('c', 'Cost', '40'), N('p', 'Target (%)', '35'), SEL('m', 'Target type', [['margin', 'Gross margin'], ['markup', 'Markup']]), SY], 'Calculate Price',
-    v => { const c = num(v.c), p = num(v.p); if (bad(c, p) || c < 0) return err('Enter valid values.'); if (v.m === 'margin' && p >= 100) return err('Margin must be below 100%.'); const s = v.m === 'margin' ? c / (1 - p / 100) : c * (1 + p / 100); return kv([['Selling price', '<b>' + money(s, v.sym) + '</b>'], ['Profit', money(s - c, v.sym)], ['Margin', fmt((s - c) / s * 100) + '%'], ['Markup', fmt(c ? (s - c) / c * 100 : NaN) + '%']]); });
-  push('break-even-calculator', 'Break-even Calculator', FIN, 'fa-solid fa-scale-unbalanced-flip', 'Units and revenue needed to cover fixed and variable costs.',
-    [N('f', 'Fixed Costs', '12000'), N('v', 'Variable Cost per Unit', '8'), N('p', 'Selling Price per Unit', '20'), N('t', 'Target Profit (optional)', '0', { value: 0 }), SY], 'Calculate Break-even',
-    v => { const f = num(v.f), vc = num(v.v), p = num(v.p), t = opt(v.t); if (bad(f, vc, p) || p <= vc) return err('Selling price must be greater than variable cost per unit.'); const cm = p - vc, u = f / cm, ut = (f + t) / cm; return kv([['Contribution margin / unit', money(cm, v.sym) + ' (' + fmt(cm / p * 100, 1) + '%)'], ['Break-even units', '<b>' + fmt(Math.ceil(u), 0) + '</b>'], ['Break-even revenue', money(Math.ceil(u) * p, v.sym)], ['Units for target profit', fmt(Math.ceil(ut), 0)]]); });
-  push('crypto-profit-loss-calculator', 'Crypto Profit / Loss Calculator', FIN, 'fa-brands fa-bitcoin', 'Profit or loss on a crypto trade including buy and sell fees.',
-    [N('b', 'Buy Price (per coin)', '30000'), N('s', 'Sell Price (per coin)', '42000'), N('q', 'Quantity', '0.5'), N('bf', 'Buy Fee (%)', '0.1', { value: 0 }), N('sf', 'Sell Fee (%)', '0.1', { value: 0 }), SY], 'Calculate P/L',
-    v => { const b = num(v.b), s = num(v.s), q = num(v.q); if (bad(b, s, q) || q <= 0 || b <= 0) return err('Enter valid prices and quantity.'); const cost = b * q * (1 + opt(v.bf) / 100), proc = s * q * (1 - opt(v.sf) / 100), pl = proc - cost; return kv([['Total cost', money(cost, v.sym)], ['Proceeds after fees', money(proc, v.sym)], [pl >= 0 ? 'Profit' : 'Loss', '<b style="color:' + (pl >= 0 ? '#16a34a' : '#dc2626') + '">' + money(pl, v.sym) + '</b>'], ['Return', fmt(pl / cost * 100) + '%'], ['Break-even sell price', money(b * (1 + opt(v.bf) / 100) / (1 - opt(v.sf) / 100), v.sym)]]); });
-  push('inflation-calculator', 'Inflation Calculator', FIN, 'fa-solid fa-arrow-up-wide-short', 'Future cost or purchasing power of money under a steady inflation rate.',
-    [N('a', 'Amount Today', '1000'), N('r', 'Inflation Rate (% per year)', '4'), N('y', 'Years', '10'), SY], 'Calculate',
-    v => { const a = num(v.a), r = num(v.r), y = num(v.y); if (bad(a, r, y)) return err('Enter valid values.'); const f = Math.pow(1 + r / 100, y); return kv([['Cost of the same goods in ' + y + ' yrs', '<b>' + money(a * f, v.sym) + '</b>'], ['Purchasing power of ' + money(a, v.sym) + ' then', money(a / f, v.sym) + ' in today\'s money']]); });
-  push('savings-goal-calculator', 'Savings Goal Calculator', FIN, 'fa-solid fa-bullseye', 'Monthly saving required to hit a target amount.',
-    [N('g', 'Goal Amount', '50000'), N('s', 'Already Saved', '0', { value: 0 }), N('y', 'Years to Goal', '5'), N('r', 'Expected Return (% per year)', '5', { value: 0 }), SY], 'Calculate',
-    v => { const g = num(v.g), s = opt(v.s), y = num(v.y), r = opt(v.r), n = Math.round(y * 12); if (bad(g, y) || n <= 0) return err('Enter valid goal and years.'); const i = r / 1200, fv = s * Math.pow(1 + i, n), need = Math.max(g - fv, 0), m = i === 0 ? need / n : need * i / (Math.pow(1 + i, n) - 1); return kv([['Monthly saving needed', '<b>' + money(m, v.sym) + '</b>'], ['Total contributions', money(m * n, v.sym)], ['Growth portion', money(g - s - m * n, v.sym)]]); });
-  push('percentage-profit-loss-calculator', 'Profit & Loss Percentage Calculator', FIN, 'fa-solid fa-percent', 'Profit or loss percentage from cost price and selling price.',
-    [N('c', 'Cost Price', '800'), N('s', 'Selling Price', '920'), SY], 'Calculate',
-    v => { const c = num(v.c), s = num(v.s); if (bad(c, s) || c <= 0) return err('Enter valid prices.'); const d = s - c; return kv([[d >= 0 ? 'Profit' : 'Loss', money(Math.abs(d), v.sym)], [d >= 0 ? 'Profit %' : 'Loss %', '<b>' + fmt(Math.abs(d) / c * 100) + '%</b>']]); });
-
-  return out;
-})(),
-
-/* ---------- 3. HEALTH, MATH, SCIENCE & DATE CALCULATORS ---------- */
-...(function () {
-  'use strict';
-  const { esc, num, opt, bad, fmt, sig, err, kv, table, scroll, pre, gcd, N, S, A, SEL, D, T, today } = globalThis.QTH;
-  const MS = 'Math & Science', HL = 'Health & Fitness', DT = 'Date & Time Tools';
-  const out = []; const push = (...a) => out.push(T(...a));
-  const allNums = s => { const a = String(s || '').split(/[\s,;]+/).filter(x => x !== '').map(Number); return a.some(x => !isFinite(x)) ? null : a; };
-  const utc = s => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s || ''); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) : NaN; };
-  const dstr = ms => new Date(ms).toISOString().slice(0, 10);
-  const DAYN = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-
-  /* ===== Health ===== */
-  push('who-bmi-calculator', 'BMI Calculator (WHO) & Healthy Weight Range', HL, 'fa-solid fa-weight-scale', 'WHO BMI category and healthy weight range for your height (metric or imperial).',
-    [SEL('u', 'Units', [['m', 'Metric (kg, cm)'], ['i', 'Imperial (lb, ft + in)']]), N('w', 'Weight (kg or lb)', '70'), N('h', 'Height (cm) or feet', '170'), N('in', 'Inches (imperial only)', '0', { value: 0 })], 'Calculate BMI',
-    v => { let w = num(v.w), h = num(v.h); if (v.u === 'i') { w *= 0.45359237; h = (h * 12 + opt(v.in)) * 2.54; } if (bad(w, h) || w <= 0 || h <= 0) return err('Enter valid weight and height.'); const m = h / 100, b = w / (m * m); const cat = b < 16 ? 'Severe thinness' : b < 17 ? 'Moderate thinness' : b < 18.5 ? 'Mild thinness' : b < 25 ? 'Normal weight' : b < 30 ? 'Overweight (pre-obese)' : b < 35 ? 'Obese class I' : b < 40 ? 'Obese class II' : 'Obese class III'; const lo = 18.5 * m * m, hi = 24.9 * m * m, kg = v.u === 'i'; return kv([['Your BMI', '<b>' + fmt(b, 1) + '</b>'], ['WHO category', cat], ['Healthy weight range (18.5–24.9)', kg ? fmt(lo / 0.45359237, 1) + ' – ' + fmt(hi / 0.45359237, 1) + ' lb' : fmt(lo, 1) + ' – ' + fmt(hi, 1) + ' kg']]) + '<div style="opacity:.7;font-size:.85em">BMI is a screening tool. Many Asian populations use lower risk cut-offs (overweight ≥ 23). Not medical advice.</div>'; });
-  push('bmr-calculator', 'BMR Calculator (Mifflin-St Jeor)', HL, 'fa-solid fa-fire', 'Basal metabolic rate and daily calorie needs by activity level.',
-    [SEL('g', 'Sex', ['Male', 'Female']), N('a', 'Age (years)', '30'), N('w', 'Weight (kg)', '70'), N('h', 'Height (cm)', '170'), SEL('act', 'Activity level', [['1.2', 'Sedentary'], ['1.375', 'Light (1–3 days/wk)'], ['1.55', 'Moderate (3–5 days/wk)'], ['1.725', 'Active (6–7 days/wk)'], ['1.9', 'Very active']], '1.375')], 'Calculate BMR',
-    v => { const a = num(v.a), w = num(v.w), h = num(v.h); if (bad(a, w, h) || a <= 0 || w <= 0 || h <= 0) return err('Enter valid values.'); const b = 10 * w + 6.25 * h - 5 * a + (v.g === 'Male' ? 5 : -161), t = b * +v.act; return kv([['BMR', fmt(b, 0) + ' kcal/day'], ['Maintenance calories (TDEE)', '<b>' + fmt(t, 0) + ' kcal/day</b>'], ['Mild weight loss (−250)', fmt(t - 250, 0)], ['Weight loss (−500)', fmt(t - 500, 0)], ['Weight gain (+300)', fmt(t + 300, 0)]]); });
-  push('water-intake-calculator', 'Daily Water Intake Calculator', HL, 'fa-solid fa-glass-water', 'Estimate daily water needs from body weight and activity.',
-    [N('w', 'Weight (kg)', '70'), N('m', 'Exercise minutes per day', '30', { value: 0 }), SEL('c', 'Climate', ['Temperate', 'Hot / humid'])], 'Calculate Water',
-    v => { const w = num(v.w), m = opt(v.m); if (bad(w) || w <= 0) return err('Enter a valid weight.'); const l = w * 0.033 + m / 30 * 0.35 + (v.c === 'Hot / humid' ? 0.5 : 0); return kv([['Recommended intake', '<b>' + fmt(l, 2) + ' L/day</b>'], ['In US cups (8 fl oz)', fmt(l * 4.227, 1)], ['In 250 ml glasses', fmt(l * 4, 1)]]); });
-  push('ideal-weight-calculator', 'Ideal Body Weight Calculator', HL, 'fa-solid fa-person', 'Ideal weight using Devine, Robinson, Miller and Hamwi formulas.',
-    [SEL('g', 'Sex', ['Male', 'Female']), N('h', 'Height (cm)', '170')], 'Calculate',
-    v => { const h = num(v.h); if (bad(h) || h < 100 || h > 250) return err('Enter a height between 100 and 250 cm.'); const inch = h / 2.54 - 60, m = v.g === 'Male'; const f = { 'Devine': m ? 50 + 2.3 * inch : 45.5 + 2.3 * inch, 'Robinson': m ? 52 + 1.9 * inch : 49 + 1.7 * inch, 'Miller': m ? 56.2 + 1.41 * inch : 53.1 + 1.36 * inch, 'Hamwi': m ? 48 + 2.7 * inch : 45.5 + 2.2 * inch }; return kv(Object.keys(f).map(k => [k, fmt(f[k], 1) + ' kg / ' + fmt(f[k] * 2.20462, 1) + ' lb'])); });
-  push('body-fat-calculator', 'Body Fat Calculator (US Navy Method)', HL, 'fa-solid fa-ruler-combined', 'Estimate body fat percentage from neck, waist and hip measurements.',
-    [SEL('g', 'Sex', ['Male', 'Female']), N('h', 'Height (cm)', '175'), N('n', 'Neck (cm)', '38'), N('w', 'Waist (cm)', '85'), N('hip', 'Hip (cm, women only)', '95', { value: 0 })], 'Calculate',
-    v => { const h = num(v.h), n = num(v.n), w = num(v.w), hip = opt(v.hip); if (bad(h, n, w)) return err('Enter valid measurements.'); let bf; if (v.g === 'Male') { if (w <= n) return err('Waist must be larger than neck.'); bf = 495 / (1.0324 - 0.19077 * Math.log10(w - n) + 0.15456 * Math.log10(h)) - 450; } else { if (w + hip <= n) return err('Invalid measurements.'); bf = 495 / (1.29579 - 0.35004 * Math.log10(w + hip - n) + 0.221 * Math.log10(h)) - 450; } return kv([['Estimated body fat', '<b>' + fmt(bf, 1) + '%</b>']]) + '<div style="opacity:.7;font-size:.85em">Estimate only (±3–4%).</div>'; });
-  push('pregnancy-due-date-calculator', 'Pregnancy Due Date Calculator', HL, 'fa-solid fa-baby', 'Estimated due date and current week from the first day of your last period.',
-    [D('lmp', 'First day of last period', today()), N('c', 'Cycle length (days)', '28', { value: 28 })], 'Calculate Due Date',
-    v => { const l = utc(v.lmp), c = num(v.c) || 28; if (bad(l)) return err('Choose a date.'); const due = l + (280 + c - 28) * 864e5, el = Math.floor((Date.now() - l) / 864e5); return kv([['Estimated due date', '<b>' + dstr(due) + '</b>'], ['Current progress', el >= 0 && el <= 300 ? Math.floor(el / 7) + ' weeks ' + (el % 7) + ' days' : 'Outside the 40-week window'], ['End of first trimester', dstr(l + 84 * 864e5)], ['End of second trimester', dstr(l + 189 * 864e5)]]); });
-  push('heart-rate-zones-calculator', 'Heart Rate Zones Calculator', HL, 'fa-solid fa-heart-pulse', 'Max heart rate and training zones from your age (Tanaka formula).',
-    [N('a', 'Age (years)', '35'), N('rhr', 'Resting heart rate (optional)', '60', { value: 0 })], 'Calculate Zones',
-    v => { const a = num(v.a), rhr = opt(v.rhr); if (bad(a) || a <= 0 || a > 110) return err('Enter a valid age.'); const mx = 208 - 0.7 * a, z = [['Zone 1 – Warm-up', .5, .6], ['Zone 2 – Fat burn', .6, .7], ['Zone 3 – Aerobic', .7, .8], ['Zone 4 – Threshold', .8, .9], ['Zone 5 – Max effort', .9, 1]]; const f = p => rhr ? Math.round(rhr + (mx - rhr) * p) : Math.round(mx * p); return kv([['Max heart rate', '<b>' + Math.round(mx) + ' bpm</b>']].concat(z.map(x => [x[0], f(x[1]) + ' – ' + f(x[2]) + ' bpm']))); });
-  push('calorie-burn-calculator', 'Calories Burned Calculator (MET)', HL, 'fa-solid fa-person-running', 'Calories burned by activity, duration and body weight.',
-    [SEL('a', 'Activity', [['3.5', 'Walking (5 km/h)'], ['8.3', 'Running (8 km/h)'], ['9.8', 'Running (10 km/h)'], ['7.5', 'Cycling (20 km/h)'], ['6', 'Swimming (leisurely)'], ['3', 'Yoga'], ['6', 'Weight training'], ['7', 'Football / soccer'], ['5.5', 'Cricket / badminton'], ['4.3', 'Dancing']]), N('w', 'Weight (kg)', '70'), N('m', 'Minutes', '30')], 'Calculate Calories',
-    v => { const met = +v.a, w = num(v.w), m = num(v.m); if (bad(w, m) || w <= 0 || m <= 0) return err('Enter valid weight and minutes.'); return kv([['Calories burned', '<b>' + fmt(met * 3.5 * w / 200 * m, 0) + ' kcal</b>']]); });
-
-  /* ===== Percentages ===== */
-  push('percentage-of-number', 'What is X% of Y?', MS, 'fa-solid fa-percent', 'Find a percentage of any number.', [N('p', 'Percentage (%)', '15'), N('n', 'Of number', '200')], 'Calculate', v => { const p = num(v.p), n = num(v.n); if (bad(p, n)) return err('Enter valid numbers.'); return kv([[sig(p) + '% of ' + sig(n), '<b>' + sig(p / 100 * n) + '</b>']]); });
-  push('percentage-what-percent', 'X is What Percent of Y?', MS, 'fa-solid fa-percent', 'Find what percentage one number is of another.', [N('x', 'Number X', '30'), N('y', 'Number Y', '120')], 'Calculate', v => { const x = num(v.x), y = num(v.y); if (bad(x, y) || y === 0) return err('Y cannot be zero.'); return kv([[sig(x) + ' is what % of ' + sig(y), '<b>' + sig(x / y * 100) + '%</b>']]); });
-  push('percentage-change-calculator', 'Percentage Increase / Decrease Calculator', MS, 'fa-solid fa-arrow-trend-up', 'Percent change from an old value to a new value.', [N('a', 'Old value', '80'), N('b', 'New value', '100')], 'Calculate', v => { const a = num(v.a), b = num(v.b); if (bad(a, b) || a === 0) return err('Old value cannot be zero.'); const c = (b - a) / Math.abs(a) * 100; return kv([[c >= 0 ? 'Increase' : 'Decrease', '<b>' + sig(Math.abs(c)) + '%</b>'], ['Difference', sig(b - a)]]); });
-  push('percentage-add-subtract', 'Add or Subtract a Percentage', MS, 'fa-solid fa-plus-minus', 'Increase or reduce a number by a percentage.', [N('n', 'Number', '250'), N('p', 'Percentage (%)', '12'), SEL('o', 'Operation', [['add', 'Add %'], ['sub', 'Subtract %']])], 'Calculate', v => { const n = num(v.n), p = num(v.p); if (bad(n, p)) return err('Enter valid numbers.'); const r = v.o === 'add' ? n * (1 + p / 100) : n * (1 - p / 100); return kv([['Result', '<b>' + sig(r) + '</b>'], ['Change', sig(r - n)]]); });
-  push('percentage-difference-calculator', 'Percentage Difference Calculator', MS, 'fa-solid fa-not-equal', 'Symmetric percentage difference between two values.', [N('a', 'Value 1', '50'), N('b', 'Value 2', '80')], 'Calculate', v => { const a = num(v.a), b = num(v.b); if (bad(a, b) || a + b === 0) return err('Enter valid values.'); return kv([['Percentage difference', '<b>' + sig(Math.abs(a - b) / ((a + b) / 2) * 100) + '%</b>']]); });
-  push('reverse-percentage-calculator', 'Reverse Percentage Calculator', MS, 'fa-solid fa-rotate-left', 'Find the original number before a percentage was added or removed.', [N('r', 'Final value', '118'), N('p', 'Percentage (%)', '18'), SEL('o', 'It was', [['add', 'Increased by %'], ['sub', 'Decreased by %']])], 'Calculate', v => { const r = num(v.r), p = num(v.p); if (bad(r, p)) return err('Enter valid numbers.'); const d = v.o === 'add' ? 1 + p / 100 : 1 - p / 100; if (d === 0) return err('Invalid percentage.'); return kv([['Original value', '<b>' + sig(r / d) + '</b>']]); });
-
-  /* ===== Math ===== */
-  push('fraction-reducer', 'Fraction Reducer & Converter', MS, 'fa-solid fa-divide', 'Simplify fractions and see mixed number, decimal and percent.', [N('n', 'Numerator', '18'), N('d', 'Denominator', '24')], 'Simplify', v => { const n = num(v.n), d = num(v.d); if (bad(n, d) || d === 0 || !Number.isInteger(n) || !Number.isInteger(d)) return err('Use whole numbers; denominator cannot be zero.'); const g = gcd(n, d) || 1; let a = n / g, b = d / g; if (b < 0) { a = -a; b = -b; } const w = Math.trunc(a / b), r = Math.abs(a % b); return kv([['Simplified', '<b>' + a + '/' + b + '</b>'], ['GCD', g], ['Mixed number', r === 0 ? w : (w ? w + ' ' : (a < 0 ? '-' : '')) + r + '/' + b], ['Decimal', sig(a / b)], ['Percent', sig(a / b * 100) + '%']]); });
-  push('fraction-calculator', 'Fraction Calculator', MS, 'fa-solid fa-calculator', 'Add, subtract, multiply or divide two fractions.', [N('a', 'Numerator 1', '1'), N('b', 'Denominator 1', '2'), SEL('o', 'Operation', ['+', '−', '×', '÷']), N('c', 'Numerator 2', '3'), N('d', 'Denominator 2', '4')], 'Calculate', v => { const a = num(v.a), b = num(v.b), c = num(v.c), d = num(v.d); if (bad(a, b, c, d) || b === 0 || d === 0) return err('Denominators cannot be zero.'); let n, m; if (v.o === '+') { n = a * d + c * b; m = b * d; } else if (v.o === '−') { n = a * d - c * b; m = b * d; } else if (v.o === '×') { n = a * c; m = b * d; } else { if (c === 0) return err('Cannot divide by zero.'); n = a * d; m = b * c; } const g = gcd(n, m) || 1; n /= g; m /= g; if (m < 0) { n = -n; m = -m; } return kv([['Result', '<b>' + n + '/' + m + '</b>'], ['Decimal', sig(n / m)]]); });
-  push('matrix-determinant-calculator', 'Matrix Determinant Calculator', MS, 'fa-solid fa-table-cells', 'Determinant of a square matrix up to 8×8 (one row per line).', [A('m', 'Matrix (rows on new lines, numbers separated by spaces or commas)', '1 2 3\n0 1 4\n5 6 0')], 'Find Determinant', v => { const rows = String(v.m || '').trim().split(/\n+/).map(r => r.trim().split(/[\s,;]+/).map(Number)); const n = rows.length; if (!n || n > 8 || rows.some(r => r.length !== n || r.some(x => !isFinite(x)))) return err('Enter a square numeric matrix (up to 8×8).'); const a = rows.map(r => r.slice()); let det = 1; for (let i = 0; i < n; i++) { let p = i; for (let r = i + 1; r < n; r++) if (Math.abs(a[r][i]) > Math.abs(a[p][i])) p = r; if (Math.abs(a[p][i]) < 1e-12) { det = 0; break; } if (p !== i) { [a[p], a[i]] = [a[i], a[p]]; det = -det; } det *= a[i][i]; for (let r = i + 1; r < n; r++) { const f = a[r][i] / a[i][i]; for (let c = i; c < n; c++) a[r][c] -= f * a[i][c]; } } det = Math.round(det * 1e9) / 1e9; return kv([['Size', n + '×' + n], ['Determinant', '<b>' + sig(det) + '</b>'], ['Invertible?', det !== 0 ? 'Yes' : 'No (singular)']]); });
-  push('standard-deviation-calculator', 'Standard Deviation Calculator', MS, 'fa-solid fa-chart-column', 'Population and sample standard deviation, variance and mean.', [A('n', 'Numbers (separated by spaces, commas or new lines)', '4, 8, 15, 16, 23, 42')], 'Calculate', v => { const a = allNums(v.n); if (!a || a.length < 2) return err('Enter at least two valid numbers.'); const n = a.length, mean = a.reduce((x, y) => x + y, 0) / n, ss = a.reduce((x, y) => x + (y - mean) ** 2, 0); return kv([['Count', n], ['Mean', sig(mean)], ['Population σ', '<b>' + sig(Math.sqrt(ss / n)) + '</b>'], ['Sample s', '<b>' + sig(Math.sqrt(ss / (n - 1))) + '</b>'], ['Population variance', sig(ss / n)], ['Sample variance', sig(ss / (n - 1))], ['Standard error', sig(Math.sqrt(ss / (n - 1)) / Math.sqrt(n))]]); });
-  push('mean-median-mode-calculator', 'Mean, Median, Mode & Range Calculator', MS, 'fa-solid fa-chart-simple', 'Descriptive statistics for a list of numbers.', [A('n', 'Numbers', '3 7 7 2 9 10 7')], 'Calculate', v => { const a = allNums(v.n); if (!a || !a.length) return err('Enter valid numbers.'); const s = a.slice().sort((x, y) => x - y), n = s.length, sum = s.reduce((x, y) => x + y, 0), med = n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2, cnt = {}; s.forEach(x => cnt[x] = (cnt[x] || 0) + 1); const mx = Math.max(...Object.values(cnt)), mode = mx === 1 ? 'No mode' : Object.keys(cnt).filter(k => cnt[k] === mx).join(', '); return kv([['Count', n], ['Sum', sig(sum)], ['Mean', sig(sum / n)], ['Median', sig(med)], ['Mode', mode], ['Min / Max', sig(s[0]) + ' / ' + sig(s[n - 1])], ['Range', sig(s[n - 1] - s[0])]]); });
-  push('gcd-lcm-calculator', 'GCD & LCM Calculator', MS, 'fa-solid fa-hashtag', 'Greatest common divisor and least common multiple of numbers.', [A('n', 'Whole numbers', '12 18 24')], 'Calculate', v => { const a = allNums(v.n); if (!a || a.length < 2 || a.some(x => !Number.isInteger(x) || x === 0)) return err('Enter two or more non-zero whole numbers.'); let g = a[0], l = Math.abs(a[0]); a.slice(1).forEach(x => { g = gcd(g, x); l = l / gcd(l, x) * Math.abs(x); }); return kv([['GCD (HCF)', '<b>' + g + '</b>'], ['LCM', '<b>' + l + '</b>']]); });
-  push('prime-number-checker', 'Prime Number Checker & Factorization', MS, 'fa-solid fa-p', 'Check if a number is prime and see its prime factors.', [N('n', 'Whole number', '97')], 'Check', v => { let n = num(v.n); if (bad(n) || !Number.isInteger(n) || n < 2 || n > 9e15) return err('Enter a whole number between 2 and 9,000,000,000,000,000.'); const o = n, f = []; for (let p = 2; p * p <= n; p++) while (n % p === 0) { f.push(p); n /= p; } if (n > 1) f.push(n); const pr = f.length === 1; let nx = o + 1; if (o < 1e12) { const ip = x => { if (x < 2) return false; for (let i = 2; i * i <= x; i++) if (x % i === 0) return false; return true; }; while (!ip(nx)) nx++; } return kv([['Is prime?', pr ? '✅ Yes' : '❌ No'], ['Prime factors', f.join(' × ')], ['Next prime', o < 1e12 ? nx : '—']]); });
-  push('factorial-calculator', 'Factorial Calculator', MS, 'fa-solid fa-exclamation', 'Compute n! exactly for n up to 2000.', [N('n', 'n', '20')], 'Calculate', v => { const n = num(v.n); if (bad(n) || !Number.isInteger(n) || n < 0 || n > 2000) return err('Enter a whole number from 0 to 2000.'); let r = 1n; for (let i = 2n; i <= BigInt(n); i++) r *= i; const s = r.toString(); return kv([[n + '!', s.length > 60 ? s.slice(0, 40) + '… (' + s.length + ' digits)' : s], ['Digits', s.length]]) + (s.length > 60 ? '<details><summary>Show full value</summary>' + pre(s) + '</details>' : ''); });
-  push('permutation-combination-calculator', 'Permutation & Combination Calculator', MS, 'fa-solid fa-shuffle', 'nPr and nCr for any n and r.', [N('n', 'n (total items)', '10'), N('r', 'r (chosen)', '3')], 'Calculate', v => { const n = num(v.n), r = num(v.r); if (bad(n, r) || !Number.isInteger(n) || !Number.isInteger(r) || r < 0 || n < r || n > 1000) return err('Need whole numbers with 0 ≤ r ≤ n ≤ 1000.'); let p = 1n; for (let i = 0n; i < BigInt(r); i++) p *= BigInt(n) - i; let f = 1n; for (let i = 2n; i <= BigInt(r); i++) f *= i; return kv([['Permutations nPr', p.toString()], ['Combinations nCr', (p / f).toString()]]); });
-  push('quadratic-equation-solver', 'Quadratic Equation Solver', MS, 'fa-solid fa-square-root-variable', 'Solve ax² + bx + c = 0 with real or complex roots.', [N('a', 'a', '1'), N('b', 'b', '-3'), N('c', 'c', '2')], 'Solve', v => { const a = num(v.a), b = num(v.b), c = num(v.c); if (bad(a, b, c) || a === 0) return err('a must be non-zero.'); const D = b * b - 4 * a * c; const rows = [['Discriminant', sig(D)]]; if (D > 0) rows.push(['x₁', '<b>' + sig((-b + Math.sqrt(D)) / (2 * a)) + '</b>'], ['x₂', '<b>' + sig((-b - Math.sqrt(D)) / (2 * a)) + '</b>']); else if (D === 0) rows.push(['x (double root)', '<b>' + sig(-b / (2 * a)) + '</b>']); else { const re = -b / (2 * a), im = Math.sqrt(-D) / (2 * a); rows.push(['x₁', sig(re) + ' + ' + sig(Math.abs(im)) + 'i'], ['x₂', sig(re) + ' − ' + sig(Math.abs(im)) + 'i']); } rows.push(['Vertex', '(' + sig(-b / (2 * a)) + ', ' + sig(c - b * b / (4 * a)) + ')']); return kv(rows); });
-  push('pythagorean-theorem-calculator', 'Pythagorean Theorem Calculator', MS, 'fa-solid fa-play', 'Find the missing side of a right triangle (leave one blank).', [N('a', 'Side a', '3', { value: '' }), N('b', 'Side b', '4', { value: '' }), N('c', 'Hypotenuse c', '', { value: '' })], 'Solve', v => { const a = num(v.a), b = num(v.b), c = num(v.c), k = [a, b, c].filter(isFinite).length; if (k !== 2) return err('Fill exactly two of the three sides.'); let r; if (!isFinite(c)) r = ['Hypotenuse c', Math.hypot(a, b)]; else if (!isFinite(b)) { if (c <= a) return err('Hypotenuse must be longer than side a.'); r = ['Side b', Math.sqrt(c * c - a * a)]; } else { if (c <= b) return err('Hypotenuse must be longer than side b.'); r = ['Side a', Math.sqrt(c * c - b * b)]; } return kv([[r[0], '<b>' + sig(r[1]) + '</b>']]); });
-  push('circle-calculator', 'Circle Calculator (Area, Circumference)', MS, 'fa-regular fa-circle', 'Radius, diameter, circumference and area from any one value.', [N('v', 'Value', '5'), SEL('t', 'This is the', ['Radius', 'Diameter', 'Circumference', 'Area'])], 'Calculate', v => { const x = num(v.v); if (bad(x) || x <= 0) return err('Enter a positive number.'); const r = v.t === 'Radius' ? x : v.t === 'Diameter' ? x / 2 : v.t === 'Circumference' ? x / (2 * Math.PI) : Math.sqrt(x / Math.PI); return kv([['Radius', sig(r)], ['Diameter', sig(2 * r)], ['Circumference', sig(2 * Math.PI * r)], ['Area', sig(Math.PI * r * r)]]); });
-  push('triangle-area-calculator', 'Triangle Calculator (Heron\'s Formula)', MS, 'fa-solid fa-play', 'Area, perimeter, angles and type from three sides.', [N('a', 'Side a', '5'), N('b', 'Side b', '6'), N('c', 'Side c', '7')], 'Calculate', v => { const a = num(v.a), b = num(v.b), c = num(v.c); if (bad(a, b, c) || a <= 0 || b <= 0 || c <= 0 || a + b <= c || a + c <= b || b + c <= a) return err('These sides cannot form a triangle.'); const s = (a + b + c) / 2, A = Math.sqrt(s * (s - a) * (s - b) * (s - c)), ang = (x, y, z) => Math.acos((y * y + z * z - x * x) / (2 * y * z)) * 180 / Math.PI; const t = (a === b && b === c) ? 'Equilateral' : (a === b || b === c || a === c) ? 'Isosceles' : 'Scalene'; return kv([['Area', '<b>' + sig(A) + '</b>'], ['Perimeter', sig(2 * s)], ['Type', t], ['Angles', sig(ang(a, b, c)) + '°, ' + sig(ang(b, a, c)) + '°, ' + sig(ang(c, a, b)) + '°']]); });
-  push('roman-numeral-converter', 'Roman Numeral Converter', MS, 'fa-solid fa-landmark', 'Convert numbers to Roman numerals and back.', [S('v', 'Number (1–3999) or Roman numeral', 'e.g. 2025 or MMXXV')], 'Convert', v => { const s = String(v.v || '').trim().toUpperCase(); const map = [[1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'], [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'], [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']]; if (/^\d+$/.test(s)) { let n = +s; if (n < 1 || n > 3999) return err('Use 1–3999.'); let r = ''; map.forEach(([val, sym]) => { while (n >= val) { r += sym; n -= val; } }); return kv([['Roman numeral', '<b>' + r + '</b>']]); } if (/^[MDCLXVI]+$/.test(s)) { let n = 0, i = 0; map.forEach(([val, sym]) => { while (s.startsWith(sym, i)) { n += val; i += sym.length; } }); if (i !== s.length) return err('Not a valid Roman numeral.'); return kv([['Number', '<b>' + n + '</b>']]); } return err('Enter digits or a Roman numeral.'); });
-  const ONES = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'], TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
-  const w99 = n => n < 20 ? ONES[n] : TENS[Math.floor(n / 10)] + (n % 10 ? '-' + ONES[n % 10] : '');
-  const w999 = n => (n >= 100 ? ONES[Math.floor(n / 100)] + ' hundred' + (n % 100 ? ' and ' : '') : '') + (n % 100 ? w99(n % 100) : '');
-  const wInt = (n, indian) => { if (n === 0) return 'zero'; const parts = []; if (indian) { const u = [[1e7, 'crore'], [1e5, 'lakh'], [1e3, 'thousand']]; let r = n; u.forEach(([val, nm]) => { if (r >= val) { const q = Math.floor(r / val); parts.push((q >= 100 && nm === 'crore' ? wInt(q, true) : w99(q)) + ' ' + nm); r %= val; } }); if (r) parts.push(w999(r)); } else { const u = [[1e12, 'trillion'], [1e9, 'billion'], [1e6, 'million'], [1e3, 'thousand']]; let r = n; u.forEach(([val, nm]) => { if (r >= val) { parts.push(w999(Math.floor(r / val)) + ' ' + nm); r %= val; } }); if (r) parts.push(w999(r)); } return parts.join(' '); };
-  push('number-to-words-converter', 'Number to Words Converter (English / Indian)', MS, 'fa-solid fa-spell-check', 'Write numbers and cheque amounts in words (international or lakh/crore system).', [N('n', 'Number', '1234567.89'), SEL('s', 'System', [['int', 'International (million, billion)'], ['ind', 'Indian (lakh, crore)']]), S('cur', 'Currency name (optional)', 'e.g. rupees, dollars')], 'Convert', v => { const n = num(v.n); if (bad(n) || Math.abs(n) > 999999999999999) return err('Enter a number up to 999 trillion.'); const neg = n < 0, a = Math.abs(n), ip = Math.floor(a), fp = Math.round((a - ip) * 100), ind = v.s === 'ind', cur = String(v.cur || '').trim(); let t = (neg ? 'minus ' : '') + wInt(ip, ind) + (cur ? ' ' + cur : ''); if (fp) t += (cur ? ' and ' : ' point ') + (cur ? wInt(fp) + ' cents/paise' : String(fp).padStart(2, '0').split('').map(d => ONES[+d] || 'zero').join(' ')); return kv([['In words', '<b>' + esc(t.charAt(0).toUpperCase() + t.slice(1)) + (cur ? ' only' : '') + '</b>']]); });
-  push('random-number-generator', 'Random Number Generator', MS, 'fa-solid fa-dice', 'Generate one or many random integers or decimals in a range.', [N('a', 'Minimum', '1', { value: 1 }), N('b', 'Maximum', '100', { value: 100 }), N('c', 'How many', '5', { value: 5 }), SEL('t', 'Type', ['Integers', 'Decimals (2 places)']), SEL('u', 'Unique values only', ['No', 'Yes'])], 'Generate', v => { let a = num(v.a), b = num(v.b), c = Math.round(num(v.c)); if (bad(a, b, c) || c < 1 || c > 1000) return err('Enter valid range and a count of 1–1000.'); if (a > b) [a, b] = [b, a]; const int = v.t === 'Integers'; if (int && v.u === 'Yes' && c > Math.floor(b) - Math.ceil(a) + 1) return err('Not enough unique integers in that range.'); const r = [], seen = new Set(); while (r.length < c) { const x = int ? Math.floor(Math.random() * (Math.floor(b) - Math.ceil(a) + 1)) + Math.ceil(a) : Math.round((Math.random() * (b - a) + a) * 100) / 100; if (v.u === 'Yes' && seen.has(x)) continue; seen.add(x); r.push(x); } return pre(r.join(', ')); });
-  push('scientific-notation-converter', 'Scientific Notation Converter', MS, 'fa-solid fa-superscript', 'Convert numbers to scientific, engineering and decimal notation.', [S('n', 'Number (e.g. 0.00045 or 4.5e-4)', '123456789')], 'Convert', v => { const n = Number(String(v.n).replace(/,/g, '')); if (!isFinite(n)) return err('Enter a valid number.'); if (n === 0) return kv([['Scientific', '0 × 10⁰']]); const e = Math.floor(Math.log10(Math.abs(n))), m = n / Math.pow(10, e), ee = Math.floor(e / 3) * 3; return kv([['Scientific', '<b>' + sig(m) + ' × 10<sup>' + e + '</sup></b>'], ['E-notation', n.toExponential()], ['Engineering', sig(n / Math.pow(10, ee)) + ' × 10<sup>' + ee + '</sup>'], ['Decimal', n.toLocaleString('en-US', { maximumFractionDigits: 20 })]]); });
-  push('ratio-simplifier', 'Ratio Simplifier & Scaler', MS, 'fa-solid fa-colon', 'Simplify a ratio and scale it to a new value.', [N('a', 'A', '16'), N('b', 'B', '9'), N('s', 'Scale: if A becomes… (optional)', '1920', { value: '' })], 'Simplify', v => { const a = num(v.a), b = num(v.b), s = num(v.s); if (bad(a, b) || !Number.isInteger(a) || !Number.isInteger(b) || a <= 0 || b <= 0) return err('Use positive whole numbers.'); const g = gcd(a, b), rows = [['Simplified ratio', '<b>' + a / g + ' : ' + b / g + '</b>'], ['Decimal (A÷B)', sig(a / b)]]; if (isFinite(s)) rows.push(['Scaled B', sig(s * b / a)]); return kv(rows); });
-
-  /* ===== Dates ===== */
-  push('date-difference-calculator', 'Date Difference Calculator', DT, 'fa-solid fa-calendar-days', 'Exact years, months and days between two dates.', [D('a', 'Start date', today()), D('b', 'End date', today())], 'Calculate', v => { let a = utc(v.a), b = utc(v.b); if (bad(a, b)) return err('Choose both dates.'); if (a > b) [a, b] = [b, a]; const x = new Date(a), y = new Date(b); let yy = y.getUTCFullYear() - x.getUTCFullYear(), mm = y.getUTCMonth() - x.getUTCMonth(), dd = y.getUTCDate() - x.getUTCDate(); if (dd < 0) { mm--; dd += new Date(Date.UTC(y.getUTCFullYear(), y.getUTCMonth(), 0)).getUTCDate(); } if (mm < 0) { yy--; mm += 12; } const days = Math.round((b - a) / 864e5); return kv([['Difference', '<b>' + yy + ' years, ' + mm + ' months, ' + dd + ' days</b>'], ['Total days', days.toLocaleString()], ['Total weeks', fmt(days / 7, 1)], ['Total months', fmt(yy * 12 + mm + dd / 30.44, 1)], ['Total hours', (days * 24).toLocaleString()]]); });
-  push('days-between-dates-calculator', 'Days Between Dates Calculator (with Business Days)', DT, 'fa-solid fa-calendar-check', 'Count calendar days, weekdays and weekends between two dates.', [D('a', 'From', today()), D('b', 'To', today()), SEL('inc', 'Include end date?', ['No', 'Yes'])], 'Count Days', v => { let a = utc(v.a), b = utc(v.b); if (bad(a, b)) return err('Choose both dates.'); if (a > b) [a, b] = [b, a]; const total = Math.round((b - a) / 864e5) + (v.inc === 'Yes' ? 1 : 0); let wk = 0, we = 0; const n = Math.round((b - a) / 864e5) + (v.inc === 'Yes' ? 1 : 0); for (let i = 0; i < Math.min(n, 100000); i++) { const d = new Date(a + i * 864e5).getUTCDay(); d === 0 || d === 6 ? we++ : wk++; } return kv([['Calendar days', '<b>' + total.toLocaleString() + '</b>'], ['Business days (Mon–Fri)', wk.toLocaleString()], ['Weekend days', we.toLocaleString()]]); });
-  push('add-subtract-days-calculator', 'Add or Subtract Days from a Date', DT, 'fa-solid fa-calendar-plus', 'Find the date that is N days, weeks, months or years from a date.', [D('d', 'Start date', today()), N('n', 'Amount', '30'), SEL('u', 'Unit', ['Days', 'Weeks', 'Months', 'Years']), SEL('o', 'Direction', [['add', 'Add'], ['sub', 'Subtract']])], 'Calculate Date', v => { const s = utc(v.d), n = num(v.n); if (bad(s, n)) return err('Enter a date and amount.'); const k = (v.o === 'add' ? 1 : -1) * n, d = new Date(s); if (v.u === 'Days') d.setUTCDate(d.getUTCDate() + k); else if (v.u === 'Weeks') d.setUTCDate(d.getUTCDate() + 7 * k); else if (v.u === 'Months') d.setUTCMonth(d.getUTCMonth() + k); else d.setUTCFullYear(d.getUTCFullYear() + k); return kv([['Result', '<b>' + d.toISOString().slice(0, 10) + '</b>'], ['Weekday', DAYN[d.getUTCDay()]]]); });
-  push('day-of-week-finder', 'Day of the Week Finder', DT, 'fa-solid fa-calendar-day', 'Weekday, week number and day-of-year for any date.', [D('d', 'Date', today())], 'Find Day', v => { const s = utc(v.d); if (bad(s)) return err('Choose a date.'); const d = new Date(s), y = d.getUTCFullYear(), doy = Math.round((s - Date.UTC(y, 0, 0)) / 864e5), t = new Date(Date.UTC(y, d.getUTCMonth(), d.getUTCDate())); t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7)); const wk = Math.ceil(((t - Date.UTC(t.getUTCFullYear(), 0, 1)) / 864e5 + 1) / 7); return kv([['Weekday', '<b>' + DAYN[d.getUTCDay()] + '</b>'], ['Day of year', doy], ['ISO week number', wk], ['Leap year?', (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0 ? 'Yes' : 'No']]); });
-  push('countdown-days-calculator', 'Days Until Date Countdown', DT, 'fa-solid fa-hourglass-half', 'How many days, weeks and hours remain until a date.', [D('d', 'Target date', ''), S('l', 'Event name (optional)', 'Birthday, holiday…')], 'Count Down', v => { const s = utc(v.d); if (bad(s)) return err('Choose a target date.'); const t = utc(today()), d = Math.round((s - t) / 864e5); return kv([[esc(v.l || 'Target') + ' in', '<b>' + (d >= 0 ? d + ' days' : Math.abs(d) + ' days ago') + '</b>'], ['Weeks', fmt(Math.abs(d) / 7, 1)], ['Hours', (Math.abs(d) * 24).toLocaleString()]]); });
-  const Z = [['Capricorn ♑', 12, 22, 1, 19], ['Aquarius ♒', 1, 20, 2, 18], ['Pisces ♓', 2, 19, 3, 20], ['Aries ♈', 3, 21, 4, 19], ['Taurus ♉', 4, 20, 5, 20], ['Gemini ♊', 5, 21, 6, 20], ['Cancer ♋', 6, 21, 7, 22], ['Leo ♌', 7, 23, 8, 22], ['Virgo ♍', 8, 23, 9, 22], ['Libra ♎', 9, 23, 10, 22], ['Scorpio ♏', 10, 23, 11, 21], ['Sagittarius ♐', 11, 22, 12, 21]];
-  const CZ = ['Monkey', 'Rooster', 'Dog', 'Pig', 'Rat', 'Ox', 'Tiger', 'Rabbit', 'Dragon', 'Snake', 'Horse', 'Goat'];
-  push('age-zodiac-calculator', 'Age Calculator & Zodiac Sign', DT, 'fa-solid fa-cake-candles', 'Exact age, next birthday, weekday of birth and zodiac signs.', [D('b', 'Date of birth', ''), D('t', 'Age at date (default: today)', today())], 'Calculate Age', v => { const b = utc(v.b), t = utc(v.t); if (bad(b, t) || t < b) return err('Enter a valid birth date that is not after the target date.'); const x = new Date(b), y = new Date(t); let yy = y.getUTCFullYear() - x.getUTCFullYear(), mm = y.getUTCMonth() - x.getUTCMonth(), dd = y.getUTCDate() - x.getUTCDate(); if (dd < 0) { mm--; dd += new Date(Date.UTC(y.getUTCFullYear(), y.getUTCMonth(), 0)).getUTCDate(); } if (mm < 0) { yy--; mm += 12; } let nb = Date.UTC(y.getUTCFullYear(), x.getUTCMonth(), x.getUTCDate()); if (nb < t) nb = Date.UTC(y.getUTCFullYear() + 1, x.getUTCMonth(), x.getUTCDate()); const m = x.getUTCMonth() + 1, d = x.getUTCDate(); const z = Z.find(s => (m === s[1] && d >= s[2]) || (m === s[3] && d <= s[4])) || Z[0]; return kv([['Age', '<b>' + yy + ' years, ' + mm + ' months, ' + dd + ' days</b>'], ['Total days lived', Math.round((t - b) / 864e5).toLocaleString()], ['Next birthday in', Math.round((nb - t) / 864e5) + ' days'], ['Born on a', DAYN[x.getUTCDay()]], ['Western zodiac', z[0]], ['Chinese zodiac (calendar year)', CZ[x.getUTCFullYear() % 12]]]); });
-  push('leap-year-checker', 'Leap Year Checker', DT, 'fa-solid fa-calendar', 'Is it a leap year? Also lists the next leap years.', [N('y', 'Year', '2028', { value: new Date().getFullYear() })], 'Check Year', v => { const y = num(v.y); if (bad(y) || !Number.isInteger(y) || y < 1) return err('Enter a valid year.'); const L = n => (n % 4 === 0 && n % 100 !== 0) || n % 400 === 0, nx = []; for (let n = y + 1; nx.length < 5; n++) if (L(n)) nx.push(n); return kv([[y + ' is a leap year?', L(y) ? '✅ Yes (366 days)' : '❌ No (365 days)'], ['Next leap years', nx.join(', ')], ['Days in February', L(y) ? 29 : 28]]); });
-  push('work-hours-timesheet-calculator', 'Work Hours Timesheet Calculator', DT, 'fa-solid fa-business-time', 'Total hours and pay from daily start, end and break times.', [A('t', 'One shift per line: start end break-minutes', '09:00 17:30 30\n09:15 18:00 45\n08:50 16:40 30', { rows: 8 }), N('r', 'Hourly rate (optional)', '20', { value: 0 }), N('ot', 'Overtime after hours/week (optional)', '40', { value: 0 })], 'Calculate Hours', v => { const L = String(v.t || '').trim().split(/\n+/).filter(Boolean); if (!L.length) return err('Add at least one shift.'); const tm = s => { const m = /^(\d{1,2}):(\d{2})$/.exec(s); return m ? +m[1] * 60 + +m[2] : NaN; }; let tot = 0; const rows = []; for (let i = 0; i < L.length; i++) { const p = L[i].trim().split(/\s+/), s = tm(p[0]), e = tm(p[1]), br = p[2] ? +p[2] : 0; if (bad(s, e, br)) return err('Line ' + (i + 1) + ': use HH:MM HH:MM minutes'); let d = e - s; if (d < 0) d += 1440; d -= br; if (d < 0) return err('Line ' + (i + 1) + ': break longer than shift.'); tot += d; rows.push([i + 1, p[0] + ' – ' + p[1], br + ' min', fmt(d / 60, 2) + ' h']); } const h = tot / 60, r = opt(v.r), ot = opt(v.ot), reg = ot ? Math.min(h, ot) : h, ovt = ot ? Math.max(h - ot, 0) : 0; const res = [['Shifts', L.length], ['Total hours', '<b>' + fmt(h, 2) + ' h (' + Math.floor(tot / 60) + 'h ' + tot % 60 + 'm)</b>'], ['Average / shift', fmt(h / L.length, 2) + ' h']]; if (r) res.push(['Gross pay' + (ovt ? ' (OT ×1.5)' : ''), '<b>' + fmt(reg * r + ovt * r * 1.5) + '</b>']); return kv(res) + '<div style="margin-top:10px">' + table(['#', 'Shift', 'Break', 'Hours'], rows) + '</div>'; });
-  push('time-duration-calculator', 'Time Duration Calculator', DT, 'fa-solid fa-stopwatch', 'Add up durations in HH:MM:SS format.', [A('t', 'One duration per line (HH:MM:SS or MM:SS)', '01:30:00\n00:45:30\n02:10:15')], 'Add Durations', v => { const L = String(v.t || '').trim().split(/\n+/).filter(Boolean); let s = 0; for (const l of L) { const p = l.trim().split(':').map(Number); if (p.some(x => !isFinite(x) || x < 0) || p.length > 3) return err('Invalid duration: ' + l); while (p.length < 3) p.unshift(0); s += p[0] * 3600 + p[1] * 60 + p[2]; } if (!L.length) return err('Add durations.'); const f = n => String(Math.floor(n)).padStart(2, '0'); return kv([['Total', '<b>' + f(s / 3600) + ':' + f(s % 3600 / 60) + ':' + f(s % 60) + '</b>'], ['Decimal hours', fmt(s / 3600, 3)], ['Total minutes', fmt(s / 60, 1)], ['Total seconds', s]]); });
-
-  return out;
-})(),
-
-/* ---------- 4. DEVELOPER, CODING & DATA TOOLS ---------- */
-...(function () {
-  'use strict';
-  const { esc, num, opt, bad, fmt, sig, err, kv, table, scroll, pre, slug, el, N, S, A, SEL, COL, T } = globalThis.QTH;
-  const DV = 'Developer Tools';
-  const out = []; const push = (...a) => out.push(T(...a));
-  const need = (v, k, m) => { if (!String(v[k] == null ? '' : v[k]).trim()) throw new Error(m || 'Please enter some input.'); return String(v[k]); };
-  const u8 = s => new TextEncoder().encode(s);
-  const b64e = s => { let b = ''; u8(s).forEach(c => b += String.fromCharCode(c)); return btoa(b); };
-  const b64d = s => { const b = atob(s.replace(/-/g, '+').replace(/_/g, '/').replace(/\s+/g, '')); return new TextDecoder().decode(Uint8Array.from(b, c => c.charCodeAt(0))); };
-  const copyArea = (s, rows) => '<textarea readonly rows="' + (rows || 12) + '" style="width:100%;font-family:ui-monospace,Menlo,Consolas,monospace" onclick="this.select()">' + esc(s) + '</textarea>';
-
-  push('json-formatter-validator', 'JSON Formatter & Validator', DV, 'fa-solid fa-code', 'Beautify, minify and validate JSON with precise error messages.', [A('j', 'JSON', '{"name":"QuickToolHub","tools":500}', { rows: 10 }), SEL('m', 'Mode', [['2', 'Beautify (2 spaces)'], ['4', 'Beautify (4 spaces)'], ['tab', 'Beautify (tabs)'], ['min', 'Minify']]), SEL('s', 'Sort keys', ['No', 'Yes'])], 'Format JSON', v => { const s = need(v, 'j'); let o; try { o = JSON.parse(s); } catch (e) { return err('Invalid JSON: ' + e.message); } const sort = x => Array.isArray(x) ? x.map(sort) : x && typeof x === 'object' ? Object.keys(x).sort().reduce((r, k) => (r[k] = sort(x[k]), r), {}) : x; if (v.s === 'Yes') o = sort(o); const r = v.m === 'min' ? JSON.stringify(o) : JSON.stringify(o, null, v.m === 'tab' ? '\t' : +v.m); return '<div style="color:#16a34a;font-weight:600;margin-bottom:6px">✅ Valid JSON (' + r.length + ' chars)</div>' + copyArea(r, 14); });
-  push('json-validator', 'JSON Validator', DV, 'fa-solid fa-circle-check', 'Check whether text is valid JSON and see where it breaks.', [A('j', 'JSON', '{"a": 1,}', { rows: 8 })], 'Validate', v => { const s = need(v, 'j'); try { const o = JSON.parse(s); return '<div style="color:#16a34a;font-weight:600">✅ Valid JSON</div>' + kv([['Type', Array.isArray(o) ? 'Array (' + o.length + ' items)' : typeof o === 'object' && o ? 'Object (' + Object.keys(o).length + ' keys)' : typeof o], ['Size', s.length + ' chars']]); } catch (e) { return err('Invalid JSON: ' + e.message); } });
-  const x2j = n => { const o = {}; if (n.attributes && n.attributes.length) for (const a of n.attributes) (o['@attributes'] = o['@attributes'] || {})[a.name] = a.value; let txt = ''; for (const c of n.childNodes) { if (c.nodeType === 3 || c.nodeType === 4) txt += c.nodeValue; else if (c.nodeType === 1) { const r = x2j(c); if (o[c.nodeName] === undefined) o[c.nodeName] = r; else { if (!Array.isArray(o[c.nodeName])) o[c.nodeName] = [o[c.nodeName]]; o[c.nodeName].push(r); } } } txt = txt.trim(); if (txt) { if (!Object.keys(o).length) return txt; o['#text'] = txt; } return Object.keys(o).length ? o : ''; };
-  push('xml-to-json', 'XML to JSON Converter', DV, 'fa-solid fa-file-code', 'Convert XML documents to JSON (attributes under @attributes).', [A('x', 'XML', '<root><item id="1">Hello</item></root>', { rows: 10 })], 'Convert', v => { const s = need(v, 'x'), d = new DOMParser().parseFromString(s, 'application/xml'), e = d.querySelector('parsererror'); if (e) return err('Invalid XML: ' + e.textContent.split('\n')[0]); return copyArea(JSON.stringify({ [d.documentElement.nodeName]: x2j(d.documentElement) }, null, 2), 14); });
-  const flat = (o, p, r) => { if (o && typeof o === 'object' && !Array.isArray(o)) Object.keys(o).forEach(k => flat(o[k], p ? p + '.' + k : k, r)); else r[p] = Array.isArray(o) ? JSON.stringify(o) : o; return r; };
-  const csvc = x => { x = x == null ? '' : String(x); return /[",\n\r]/.test(x) ? '"' + x.replace(/"/g, '""') + '"' : x; };
-  push('json-to-csv', 'JSON to CSV Converter', DV, 'fa-solid fa-file-csv', 'Turn a JSON array of objects into CSV (nested keys flattened with dots).', [A('j', 'JSON array', '[{"name":"A","age":30},{"name":"B","age":25}]', { rows: 10 }), SEL('d', 'Delimiter', [[',', 'Comma'], [';', 'Semicolon'], ['\t', 'Tab']])], 'Convert', v => { let a; try { a = JSON.parse(need(v, 'j')); } catch (e) { return err('Invalid JSON: ' + e.message); } if (!Array.isArray(a)) a = [a]; const rows = a.map(x => flat(x, '', {})), h = [...new Set(rows.flatMap(Object.keys))]; return copyArea([h.map(csvc).join(v.d)].concat(rows.map(r => h.map(k => csvc(r[k])).join(v.d))).join('\n'), 14); });
-  const parseCSV = (t, d) => { const rows = []; let r = [], c = '', q = false; for (let i = 0; i < t.length; i++) { const ch = t[i]; if (q) { if (ch === '"') { if (t[i + 1] === '"') { c += '"'; i++; } else q = false; } else c += ch; } else if (ch === '"') q = true; else if (ch === d) { r.push(c); c = ''; } else if (ch === '\n') { r.push(c); rows.push(r); r = []; c = ''; } else if (ch !== '\r') c += ch; } if (c || r.length) { r.push(c); rows.push(r); } return rows; };
-  push('csv-to-json', 'CSV to JSON Converter', DV, 'fa-solid fa-file-lines', 'Convert CSV with a header row into a JSON array.', [A('c', 'CSV', 'name,age\nAsha,30\nBen,25', { rows: 10 }), SEL('d', 'Delimiter', [[',', 'Comma'], [';', 'Semicolon'], ['\t', 'Tab']])], 'Convert', v => { const r = parseCSV(need(v, 'c'), v.d); if (r.length < 2) return err('Need a header row and at least one data row.'); const h = r[0].map(x => x.trim()); return copyArea(JSON.stringify(r.slice(1).filter(x => x.some(y => y !== '')).map(x => Object.fromEntries(h.map((k, i) => [k, x[i] === undefined ? '' : (x[i] !== '' && isFinite(x[i]) ? +x[i] : x[i])]))), null, 2), 14); });
-  push('sql-query-formatter', 'SQL Query Formatter', DV, 'fa-solid fa-database', 'Format and uppercase keywords in SQL queries.', [A('q', 'SQL', 'select id,name from users where age>18 and active=1 order by name limit 10', { rows: 8 })], 'Format SQL', v => { let s = need(v, 'q').replace(/\s+/g, ' ').trim(); const kw = ['select', 'from', 'where', 'and', 'or', 'order by', 'group by', 'having', 'limit', 'offset', 'insert into', 'values', 'update', 'set', 'delete from', 'join', 'left join', 'right join', 'inner join', 'outer join', 'full join', 'cross join', 'on', 'union all', 'union', 'as', 'in', 'not', 'null', 'is', 'like', 'between', 'distinct', 'case', 'when', 'then', 'else', 'end', 'create table', 'alter table', 'drop table', 'asc', 'desc', 'count', 'sum', 'avg', 'min', 'max']; const parts = s.split(/('(?:[^']|'')*')/); s = parts.map((p, i) => i % 2 ? p : p.replace(new RegExp('\\b(' + kw.sort((a, b) => b.length - a.length).join('|').replace(/ /g, '\\s+') + ')\\b', 'gi'), m => m.toUpperCase()).replace(/\s*,\s*/g, ', ')).join(''); s = s.replace(/\b(FROM|WHERE|GROUP BY|ORDER BY|HAVING|LIMIT|OFFSET|UNION ALL|UNION|VALUES|SET)\b/g, '\n$1').replace(/\b((?:LEFT |RIGHT |INNER |OUTER |FULL |CROSS )?JOIN)\b/g, '\n$1').replace(/\b(AND|OR)\b/g, '\n  $1').replace(/^\n/, ''); return copyArea(s, 10); });
-  push('base64-encoder-decoder', 'Base64 Encoder / Decoder', DV, 'fa-solid fa-lock', 'Encode or decode Base64 text with full UTF-8 support.', [A('t', 'Text', 'Hello, QuickToolHub!', { rows: 6 }), SEL('m', 'Action', [['e', 'Encode'], ['d', 'Decode'], ['u', 'Encode (URL-safe)']])], 'Run', v => { const s = need(v, 't'); try { return copyArea(v.m === 'd' ? b64d(s.trim()) : v.m === 'u' ? b64e(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') : b64e(s), 8); } catch (e) { return err('Input is not valid Base64.'); } });
-  push('url-encoder-decoder', 'URL Encoder / Decoder', DV, 'fa-solid fa-link', 'Percent-encode or decode URLs and query strings.', [A('t', 'Text or URL', 'https://example.com/?q=hello world&lang=en', { rows: 4 }), SEL('m', 'Action', [['ec', 'Encode component (encodeURIComponent)'], ['eu', 'Encode full URL (encodeURI)'], ['d', 'Decode']])], 'Run', v => { const s = need(v, 't'); try { return copyArea(v.m === 'd' ? decodeURIComponent(s.replace(/\+/g, ' ')) : v.m === 'ec' ? encodeURIComponent(s) : encodeURI(s), 5); } catch (e) { return err('Malformed URL sequence.'); } });
-  push('html-entities-encoder', 'HTML Entities Encoder / Decoder', DV, 'fa-brands fa-html5', 'Escape or unescape HTML special characters.', [A('t', 'Text', '<p class="a">Tom & Jerry</p>', { rows: 5 }), SEL('m', 'Action', [['e', 'Encode'], ['d', 'Decode']])], 'Run', v => { const s = need(v, 't'); if (v.m === 'e') return copyArea(s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])).replace(/[^\x00-\x7F]/g, c => '&#' + c.codePointAt(0) + ';'), 6); const t = document.createElement('textarea'); t.innerHTML = s; return copyArea(t.value, 6); });
-  const minCSS = s => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s+/g, ' ').replace(/\s*([{};:,>~+])\s*/g, '$1').replace(/;}/g, '}').trim();
-  const minHTML = s => { const keep = []; s = s.replace(/<(pre|textarea|script|style)[\s\S]*?<\/\1>/gi, m => { keep.push(m); return '\u0000' + (keep.length - 1) + '\u0000'; }); s = s.replace(/<!--(?!\[if)[\s\S]*?-->/g, '').replace(/>\s+</g, '><').replace(/\s{2,}/g, ' ').trim(); return s.replace(/\u0000(\d+)\u0000/g, (m, i) => /^<style/i.test(keep[i]) ? keep[i].replace(/(<style[^>]*>)([\s\S]*?)(<\/style>)/i, (a, b, c, d) => b + minCSS(c) + d) : keep[i]); };
-  const minJS = s => { let o = '', i = 0; const n = s.length, isW = c => /[A-Za-z0-9_$]/.test(c || ''); while (i < n) { const c = s[i], d = s[i + 1]; if (c === '"' || c === "'" || c === '`') { let j = i + 1; while (j < n && s[j] !== c) { if (s[j] === '\\') j++; j++; } o += s.slice(i, j + 1); i = j + 1; } else if (c === '/' && d === '/') { while (i < n && s[i] !== '\n') i++; } else if (c === '/' && d === '*') { i = s.indexOf('*/', i + 2); i = i < 0 ? n : i + 2; } else if (/\s/.test(c)) { let j = i, nl = false; while (j < n && /\s/.test(s[j])) { if (s[j] === '\n') nl = true; j++; } const p = o[o.length - 1], q = s[j]; if (p && q) { if (isW(p) && isW(q)) o += nl ? '\n' : ' '; else if ((p === '+' && q === '+') || (p === '-' && q === '-')) o += ' '; else if (nl && !/[;{}(,\[=+\-*\/%&|<>?:!]/.test(p) && !/[)\]};,.=+\-*\/%&|<>?:]/.test(q)) o += '\n'; } i = j; } else { o += c; i++; } } return o.trim(); };
-  [['css-minifier', 'CSS Minifier', 'fa-brands fa-css3-alt', 'Compress CSS by removing comments and whitespace.', minCSS, '.btn {\n  color: #fff;\n  /* note */\n  padding: 10px 20px;\n}'], ['html-minifier', 'HTML Minifier', 'fa-brands fa-html5', 'Minify HTML by stripping comments and extra whitespace.', minHTML, '<div>\n  <p>Hello</p>\n</div>'], ['javascript-minifier', 'JavaScript Minifier', 'fa-brands fa-js', 'Basic JS minifier: strips comments and whitespace (string-safe). Test the output before deploying.', minJS, '// add\nfunction add(a, b) {\n  return a + b;\n}']].forEach(m => push(m[0], m[1], DV, m[2], m[3], [A('c', 'Source code', m[5], { rows: 10 })], 'Minify', v => { const s = need(v, 'c'), r = m[4](s); return kv([['Original', s.length + ' bytes'], ['Minified', '<b>' + r.length + ' bytes</b>'], ['Saved', fmt((1 - r.length / s.length) * 100, 1) + '%']]) + copyArea(r, 8); }));
-  push('regex-tester', 'Regex Tester', DV, 'fa-solid fa-asterisk', 'Test JavaScript regular expressions with live match and group details.', [S('p', 'Pattern', '(\\w+)@(\\w+)\\.com'), S('f', 'Flags', 'g', { value: 'g' }), A('t', 'Test string', 'alice@example.com, bob@test.com', { rows: 6 })], 'Test Regex', v => { let re; try { re = new RegExp(need(v, 'p', 'Enter a pattern.'), String(v.f || '').replace(/[^dgimsuy]/g, '')); } catch (e) { return err('Invalid regex: ' + e.message); } const t = String(v.t || ''), ms = []; if (re.global) { let m, n = 0; while ((m = re.exec(t)) && n++ < 1000) { ms.push(m); if (m[0] === '') re.lastIndex++; } } else { const m = re.exec(t); if (m) ms.push(m); } if (!ms.length) return err('No matches.'); let hl = '', last = 0; ms.forEach(m => { hl += esc(t.slice(last, m.index)) + '<mark>' + esc(m[0]) + '</mark>'; last = m.index + m[0].length; }); hl += esc(t.slice(last)); return '<div style="font-weight:600">' + ms.length + ' match' + (ms.length > 1 ? 'es' : '') + '</div><div style="white-space:pre-wrap;margin:8px 0;font-family:monospace">' + hl + '</div>' + scroll(table(['#', 'Index', 'Match', 'Groups'], ms.map((m, i) => [i + 1, m.index, esc(m[0]), esc(m.slice(1).map(x => x === undefined ? '∅' : x).join(' | '))]))); });
-  push('uuid-v4-generator', 'UUID v4 Generator', DV, 'fa-solid fa-fingerprint', 'Generate cryptographically random UUIDs (v4) in bulk.', [N('n', 'How many', '5', { value: 5, min: 1, max: 500 }), SEL('c', 'Format', ['lowercase', 'UPPERCASE', 'No hyphens'])], 'Generate UUIDs', v => { const n = Math.round(num(v.n)); if (bad(n) || n < 1 || n > 500) return err('Choose 1–500.'); const r = []; for (let i = 0; i < n; i++) { let u = crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = crypto.getRandomValues(new Uint8Array(1))[0] & 15; return (c === 'x' ? r : (r & 3) | 8).toString(16); }); if (v.c === 'UPPERCASE') u = u.toUpperCase(); if (v.c === 'No hyphens') u = u.replace(/-/g, ''); r.push(u); } return copyArea(r.join('\n'), Math.min(n + 1, 14)); });
-  push('jwt-decoder', 'JWT Decoder', DV, 'fa-solid fa-key', 'Decode JSON Web Token header and payload (no signature verification).', [A('t', 'JWT', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...', { rows: 5 })], 'Decode JWT', v => { const p = need(v, 't').trim().split('.'); if (p.length < 2) return err('A JWT has three dot-separated parts.'); let h, b; try { h = JSON.parse(b64d(p[0])); b = JSON.parse(b64d(p[1])); } catch (e) { return err('Could not decode token — is it a valid JWT?'); } const d = x => x ? new Date(x * 1000).toISOString().replace('T', ' ').slice(0, 19) + ' UTC' : null, rows = []; ['iat', 'nbf', 'exp'].forEach(k => { if (b[k]) rows.push([k, d(b[k])]); }); if (b.exp) rows.push(['Status', b.exp * 1000 < Date.now() ? '❌ Expired' : '✅ Not expired']); return '<b>Header</b>' + copyArea(JSON.stringify(h, null, 2), 5) + '<b>Payload</b>' + copyArea(JSON.stringify(b, null, 2), 10) + (rows.length ? kv(rows) : '') + '<div style="opacity:.7;font-size:.85em">Signature is not verified. Never paste production secrets into online tools.</div>'; });
-  push('unix-timestamp-converter', 'Unix Epoch / Timestamp Converter', DV, 'fa-solid fa-clock-rotate-left', 'Convert Unix timestamps to dates and dates to timestamps.', [S('t', 'Timestamp (s or ms) or date string', 'e.g. 1735689600 or 2026-01-01 10:00', { value: '' })], 'Convert', v => { const s = String(v.t || '').trim(); let ms; if (!s) ms = Date.now(); else if (/^-?\d+(\.\d+)?$/.test(s)) { const n = +s; ms = Math.abs(n) > 1e11 ? n : n * 1000; } else ms = Date.parse(s); if (!isFinite(ms)) return err('Could not parse. Use a number or a date like 2026-01-01 10:00 UTC.'); const d = new Date(ms); return kv([['Seconds', '<b>' + Math.floor(ms / 1000) + '</b>'], ['Milliseconds', ms], ['UTC', d.toUTCString()], ['ISO 8601', d.toISOString()], ['Your local time', d.toString()], ['Relative', fmt((ms - Date.now()) / 864e5, 2) + ' days from now']]); });
-  const hsl2rgb = (h, s, l) => { s /= 100; l /= 100; const k = n => (n + h / 30) % 12, a = s * Math.min(l, 1 - l), f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1))); return [Math.round(255 * f(0)), Math.round(255 * f(8)), Math.round(255 * f(4))]; };
-  const parseColor = s => { s = s.trim().toLowerCase(); let m; if ((m = /^#?([0-9a-f]{3})$/.exec(s))) return m[1].split('').map(c => parseInt(c + c, 16)); if ((m = /^#?([0-9a-f]{6})([0-9a-f]{2})?$/.exec(s))) return [0, 2, 4].map(i => parseInt(m[1].substr(i, 2), 16)); if ((m = /^rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/.exec(s))) return [+m[1], +m[2], +m[3]]; if ((m = /^hsla?\(\s*([\d.]+)[\s,]+([\d.]+)%[\s,]+([\d.]+)%/.exec(s))) return hsl2rgb(+m[1], +m[2], +m[3]); const c = document.createElement('canvas').getContext('2d'); c.fillStyle = '#010203'; c.fillStyle = s; const x = c.fillStyle; if (x !== '#010203' && /^#/.test(x)) return [1, 3, 5].map(i => parseInt(x.substr(i, 2), 16)); return null; };
-  const colorRows = rgb => { const [r, g, b] = rgb, R = r / 255, G = g / 255, B = b / 255, mx = Math.max(R, G, B), mn = Math.min(R, G, B), d = mx - mn; let h = 0; if (d) h = mx === R ? ((G - B) / d) % 6 : mx === G ? (B - R) / d + 2 : (R - G) / d + 4; h = Math.round(h * 60); if (h < 0) h += 360; const l = (mx + mn) / 2, s = d ? d / (1 - Math.abs(2 * l - 1)) : 0, k = 1 - mx, c = k < 1 ? (1 - R - k) / (1 - k) : 0, m = k < 1 ? (1 - G - k) / (1 - k) : 0, y = k < 1 ? (1 - B - k) / (1 - k) : 0, hex = '#' + [r, g, b].map(x => x.toString(16).padStart(2, '0')).join(''); return '<div style="height:60px;border-radius:8px;background:' + hex + ';border:1px solid rgba(128,128,128,.4);margin-bottom:8px"></div>' + kv([['HEX', '<b>' + hex.toUpperCase() + '</b>'], ['RGB', 'rgb(' + r + ', ' + g + ', ' + b + ')'], ['HSL', 'hsl(' + h + ', ' + Math.round(s * 100) + '%, ' + Math.round(l * 100) + '%)'], ['HSV', h + '°, ' + Math.round((mx ? d / mx : 0) * 100) + '%, ' + Math.round(mx * 100) + '%'], ['CMYK', Math.round(c * 100) + '%, ' + Math.round(m * 100) + '%, ' + Math.round(y * 100) + '%, ' + Math.round(k * 100) + '%']]); };
-  push('color-converter', 'Color Converter (HEX / RGB / HSL / CMYK)', DV, 'fa-solid fa-palette', 'Convert any color between HEX, RGB, HSL, HSV and CMYK.', [S('c', 'Color (HEX, rgb(), hsl() or name)', '#3b82f6'), COL('p', 'Or pick a color', '#3b82f6')], 'Convert Color', v => { const raw = String(v.c || '').trim(), rgb = parseColor(raw || v.p); if (!rgb) return err('Could not understand that color.'); return colorRows(rgb); });
-  push('css-box-shadow-generator', 'CSS Box Shadow Generator', DV, 'fa-regular fa-square', 'Design a box-shadow visually and copy the CSS.', [N('x', 'Horizontal offset (px)', '0', { value: 6 }), N('y', 'Vertical offset (px)', '0', { value: 10 }), N('b', 'Blur (px)', '0', { value: 24 }), N('s', 'Spread (px)', '0', { value: 0 }), COL('c', 'Shadow color', '#000000'), N('o', 'Opacity (0–1)', '0.25', { value: 0.25, min: 0, max: 1 }), SEL('i', 'Inset', ['No', 'Yes'])], 'Generate CSS', v => { const rgb = parseColor(v.c) || [0, 0, 0], css = (v.i === 'Yes' ? 'inset ' : '') + opt(v.x) + 'px ' + opt(v.y) + 'px ' + opt(v.b) + 'px ' + opt(v.s) + 'px rgba(' + rgb.join(', ') + ', ' + Math.min(Math.max(opt(v.o), 0), 1) + ')'; return '<div style="padding:40px;display:flex;justify-content:center"><div style="width:140px;height:100px;border-radius:12px;background:#fff;box-shadow:' + css + '"></div></div>' + copyArea('box-shadow: ' + css + ';', 2); });
-  push('css-gradient-generator', 'CSS Gradient Generator', DV, 'fa-solid fa-droplet', 'Create linear, radial or conic CSS gradients and copy the code.', [SEL('t', 'Type', ['linear', 'radial', 'conic']), N('a', 'Angle (deg, linear/conic)', '135', { value: 135 }), COL('c1', 'Color 1', '#6366f1'), COL('c2', 'Color 2', '#ec4899'), COL('c3', 'Color 3 (optional)', '#f59e0b'), SEL('u3', 'Use color 3', ['No', 'Yes'])], 'Generate CSS', v => { const cs = [v.c1, v.c2].concat(v.u3 === 'Yes' ? [v.c3] : []).join(', '), a = opt(v.a), g = v.t === 'linear' ? 'linear-gradient(' + a + 'deg, ' + cs + ')' : v.t === 'radial' ? 'radial-gradient(circle, ' + cs + ')' : 'conic-gradient(from ' + a + 'deg, ' + cs + ')'; return '<div style="height:120px;border-radius:12px;background:' + g + '"></div>' + copyArea('background: ' + g + ';', 2); });
-  const HTTP = '100|Continue|Server received headers; client should continue.\n101|Switching Protocols|Server is switching protocols as requested.\n102|Processing|WebDAV: request is still being processed.\n103|Early Hints|Preload hints sent before the final response.\n200|OK|Request succeeded.\n201|Created|Resource created successfully.\n202|Accepted|Request accepted but not yet processed.\n203|Non-Authoritative Information|Response modified by a proxy.\n204|No Content|Success with no response body.\n205|Reset Content|Client should reset the document view.\n206|Partial Content|Partial resource returned (Range request).\n301|Moved Permanently|Resource has a new permanent URL (SEO: passes link equity).\n302|Found|Temporary redirect.\n303|See Other|Redirect to another resource with GET.\n304|Not Modified|Cached version is still valid.\n307|Temporary Redirect|Temporary redirect preserving the HTTP method.\n308|Permanent Redirect|Permanent redirect preserving the HTTP method.\n400|Bad Request|Malformed request syntax.\n401|Unauthorized|Authentication required or failed.\n402|Payment Required|Reserved for payment systems.\n403|Forbidden|Server refuses to authorize the request.\n404|Not Found|Resource does not exist.\n405|Method Not Allowed|HTTP method not supported for this resource.\n406|Not Acceptable|No content matches Accept headers.\n408|Request Timeout|Server timed out waiting for the request.\n409|Conflict|Request conflicts with current resource state.\n410|Gone|Resource permanently removed.\n411|Length Required|Content-Length header is required.\n412|Precondition Failed|A precondition in headers failed.\n413|Payload Too Large|Request body is too large.\n414|URI Too Long|The URL is too long.\n415|Unsupported Media Type|Content type not supported.\n418|I\'m a teapot|April Fools\' RFC 2324 joke status.\n422|Unprocessable Entity|Well-formed but semantically invalid request.\n425|Too Early|Server unwilling to risk replay.\n429|Too Many Requests|Rate limit exceeded.\n431|Request Header Fields Too Large|Headers are too large.\n451|Unavailable For Legal Reasons|Blocked for legal reasons.\n500|Internal Server Error|Generic server error.\n501|Not Implemented|Server does not support the functionality.\n502|Bad Gateway|Invalid response from an upstream server.\n503|Service Unavailable|Server overloaded or down for maintenance.\n504|Gateway Timeout|Upstream server did not respond in time.\n505|HTTP Version Not Supported|HTTP version not supported.\n507|Insufficient Storage|Server cannot store the representation.\n511|Network Authentication Required|Client must authenticate to gain network access.';
-  push('http-status-code-reference', 'HTTP Status Code Reference', DV, 'fa-solid fa-globe', 'Search HTTP status codes by number or keyword.', [S('q', 'Code or keyword (leave blank for all)', '404 or redirect', { value: '' })], 'Search', v => { const q = String(v.q || '').trim().toLowerCase(), r = HTTP.split('\n').map(l => l.split('|')).filter(x => !q || x.join(' ').toLowerCase().includes(q)); if (!r.length) return err('No matching status codes.'); return scroll(table(['Code', 'Name', 'Meaning'], r.map(x => ['<b>' + x[0] + '</b>', esc(x[1]), esc(x[2])]))).replace(/text-align:right/g, 'text-align:left'); });
-  push('hash-generator', 'Hash Generator (SHA-1 / SHA-256 / SHA-512)', DV, 'fa-solid fa-hashtag', 'Generate SHA hashes of text in your browser.', [A('t', 'Text', 'hello world', { rows: 4 })], 'Generate Hashes', async v => { const d = u8(need(v, 't')), rows = []; for (const a of ['SHA-1', 'SHA-256', 'SHA-384', 'SHA-512']) { const h = await crypto.subtle.digest(a, d); rows.push([a, '<code style="word-break:break-all;font-size:.85em">' + [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, '0')).join('') + '</code>']); } return kv(rows); });
-  push('password-generator', 'Secure Password Generator', DV, 'fa-solid fa-shield-halved', 'Generate strong random passwords with crypto-grade randomness.', [N('l', 'Length', '16', { value: 16, min: 6, max: 128 }), N('n', 'How many', '5', { value: 5 }), SEL('s', 'Include symbols', ['Yes', 'No']), SEL('a', 'Avoid look-alike characters (O,0,l,1)', ['Yes', 'No'])], 'Generate', v => { const L = Math.round(num(v.l)), n = Math.min(Math.round(num(v.n)) || 1, 50); if (bad(L) || L < 6 || L > 128) return err('Length must be 6–128.'); let set = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'; if (v.s === 'Yes') set += '!@#$%^&*()-_=+[]{};:,.?'; if (v.a === 'Yes') set = set.replace(/[O0lI1]/g, ''); const r = []; for (let i = 0; i < n; i++) { const a = crypto.getRandomValues(new Uint32Array(L)); r.push([...a].map(x => set[x % set.length]).join('')); } const bits = L * Math.log2(set.length); return copyArea(r.join('\n'), Math.min(n + 1, 10)) + '<div style="opacity:.75">≈ ' + Math.round(bits) + ' bits of entropy</div>'; });
-  const LW = 'lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua enim ad minim veniam quis nostrud exercitation ullamco laboris nisi aliquip ex ea commodo consequat duis aute irure in reprehenderit voluptate velit esse cillum fugiat nulla pariatur excepteur sint occaecat cupidatat non proident sunt culpa qui officia deserunt mollit anim id est laborum'.split(' ');
-  push('lorem-ipsum-generator', 'Lorem Ipsum Generator', DV, 'fa-solid fa-paragraph', 'Generate placeholder paragraphs, sentences or words.', [N('n', 'Amount', '3', { value: 3 }), SEL('u', 'Unit', ['Paragraphs', 'Sentences', 'Words'])], 'Generate', v => { const n = Math.round(num(v.n)); if (bad(n) || n < 1 || n > 200) return err('Choose 1–200.'); const w = k => Array.from({ length: k }, () => LW[Math.floor(Math.random() * LW.length)]), s = () => { const t = w(8 + Math.floor(Math.random() * 10)).join(' '); return t[0].toUpperCase() + t.slice(1) + '.'; }, p = () => Array.from({ length: 4 + Math.floor(Math.random() * 3) }, s).join(' '); let r; if (v.u === 'Words') r = w(n).join(' '); else if (v.u === 'Sentences') r = Array.from({ length: n }, s).join(' '); else { r = Array.from({ length: n }, p).join('\n\n'); r = 'Lorem ipsum dolor sit amet, ' + r.slice(r.indexOf(' ', 20) + 1); } return copyArea(r, 12); });
-  push('text-diff-checker', 'Text Diff Checker', DV, 'fa-solid fa-code-compare', 'Compare two texts line by line and highlight changes.', [A('a', 'Original text', 'line one\nline two\nline three', { rows: 7 }), A('b', 'Changed text', 'line one\nline 2\nline three\nline four', { rows: 7 })], 'Compare', v => { const a = String(v.a || '').split('\n'), b = String(v.b || '').split('\n'); if (a.length * b.length > 4e6) return err('Texts are too large to compare in the browser.'); const m = a.length, n = b.length, L = Array.from({ length: m + 1 }, () => new Uint16Array(n + 1)); for (let i = m - 1; i >= 0; i--) for (let j = n - 1; j >= 0; j--) L[i][j] = a[i] === b[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]); let i = 0, j = 0, add = 0, del = 0, h = ''; while (i < m || j < n) { if (i < m && j < n && a[i] === b[j]) { h += '<div style="padding:1px 8px">  ' + esc(a[i]) + '</div>'; i++; j++; } else if (j < n && (i === m || L[i][j + 1] >= L[i + 1][j])) { h += '<div style="padding:1px 8px;background:rgba(34,197,94,.2)">+ ' + esc(b[j]) + '</div>'; j++; add++; } else { h += '<div style="padding:1px 8px;background:rgba(239,68,68,.2)">− ' + esc(a[i]) + '</div>'; i++; del++; } } return '<div style="margin-bottom:6px;font-weight:600">' + (add + del ? add + ' added, ' + del + ' removed' : '✅ Texts are identical') + '</div><div style="font-family:monospace;white-space:pre-wrap">' + h + '</div>'; });
-  push('markdown-to-html-converter', 'Markdown to HTML Converter', DV, 'fa-brands fa-markdown', 'Convert basic Markdown (headings, lists, links, code, bold, italic) to HTML.', [A('m', 'Markdown', '# Title\n\nSome **bold** and *italic* text with a [link](https://example.com).\n\n- Item 1\n- Item 2', { rows: 10 })], 'Convert', v => { let s = esc(need(v, 'm')).replace(/\r/g, ''); const blocks = []; s = s.replace(/```([\s\S]*?)```/g, (m, c) => { blocks.push('<pre><code>' + c.replace(/^\w*\n/, '') + '</code></pre>'); return '\u0000' + (blocks.length - 1) + '\u0000'; }); const inl = t => t.replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>').replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, '<img src="$2" alt="$1">').replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2">$1</a>'); const html = s.split(/\n{2,}/).map(b => { b = b.trim(); let m; if (/^\u0000\d+\u0000$/.test(b)) return b; if ((m = /^(#{1,6})\s+(.*)$/.exec(b))) return '<h' + m[1].length + '>' + inl(m[2]) + '</h' + m[1].length + '>'; if (/^([-*+]\s.*(\n|$))+$/.test(b)) return '<ul>\n' + b.split('\n').map(l => '  <li>' + inl(l.replace(/^[-*+]\s/, '')) + '</li>').join('\n') + '\n</ul>'; if (/^(\d+\.\s.*(\n|$))+$/.test(b)) return '<ol>\n' + b.split('\n').map(l => '  <li>' + inl(l.replace(/^\d+\.\s/, '')) + '</li>').join('\n') + '\n</ol>'; if (/^&gt;\s/.test(b)) return '<blockquote>' + inl(b.replace(/^&gt;\s?/gm, '')) + '</blockquote>'; if (/^(-{3,}|\*{3,})$/.test(b)) return '<hr>'; return '<p>' + inl(b).replace(/\n/g, '<br>') + '</p>'; }).join('\n').replace(/\u0000(\d+)\u0000/g, (m, i) => blocks[i]); return copyArea(html, 10); });
-  push('word-character-counter', 'Word & Character Counter', DV, 'fa-solid fa-text-width', 'Count words, characters, sentences, paragraphs and reading time.', [A('t', 'Your text', 'Type or paste text here…', { rows: 10 })], 'Count', v => { const t = String(v.t || ''), w = (t.trim().match(/\S+/g) || []).length; return kv([['Words', '<b>' + w + '</b>'], ['Characters (with spaces)', t.length], ['Characters (no spaces)', t.replace(/\s/g, '').length], ['Sentences', (t.match(/[^.!?]+[.!?]+/g) || (t.trim() ? [1] : [])).length], ['Paragraphs', t.split(/\n\s*\n/).filter(x => x.trim()).length], ['Lines', t ? t.split('\n').length : 0], ['Reading time', fmt(w / 238, 1) + ' min'], ['Speaking time', fmt(w / 150, 1) + ' min']]); });
-  push('find-and-replace-text', 'Find & Replace Text Tool', DV, 'fa-solid fa-magnifying-glass', 'Find and replace text with optional regex and case sensitivity.', [A('t', 'Text', 'The cat sat on the mat.', { rows: 6 }), S('f', 'Find', 'cat'), S('r', 'Replace with', 'dog'), SEL('m', 'Mode', ['Plain text', 'Regular expression']), SEL('c', 'Case sensitive', ['No', 'Yes'])], 'Replace', v => { const t = need(v, 't'), f = need(v, 'f', 'Enter text to find.'); let re; try { re = new RegExp(v.m === 'Plain text' ? f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : f, 'g' + (v.c === 'Yes' ? '' : 'i')); } catch (e) { return err('Invalid regex: ' + e.message); } let n = 0; const r = t.replace(re, () => { n++; return v.r || ''; }); return '<div style="font-weight:600;margin-bottom:6px">' + n + ' replacement' + (n === 1 ? '' : 's') + '</div>' + copyArea(r, 8); });
-  push('http-header-and-curl-builder', 'cURL Command Builder', DV, 'fa-solid fa-terminal', 'Build a cURL command from method, URL, headers and body.', [SEL('m', 'Method', ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']), S('u', 'URL', 'https://api.example.com/items'), A('h', 'Headers (one per line)', 'Content-Type: application/json\nAuthorization: Bearer TOKEN', { rows: 3 }), A('b', 'Body (optional)', '{"name":"test"}', { rows: 4 })], 'Build cURL', v => { const u = need(v, 'u', 'Enter a URL.'), q = x => "'" + String(x).replace(/'/g, "'\\''") + "'"; let c = 'curl -X ' + v.m + ' ' + q(u); String(v.h || '').split('\n').filter(x => x.trim()).forEach(h => c += ' \\\n  -H ' + q(h.trim())); if (String(v.b || '').trim() && v.m !== 'GET') c += ' \\\n  -d ' + q(v.b.trim()); return copyArea(c, 6); });
-
-  /* ---------- 5. SEO, WEBMASTER & MARKETING TOOLS ---------- */
-  const SEO = 'SEO & Marketing Tools';
-  push('serp-snippet-previewer', 'Google SERP Snippet Previewer', SEO, 'fa-brands fa-google', 'Preview how your title and meta description appear in Google results (desktop and mobile).', [S('t', 'Page title', 'QuickToolHub – Free Online Tools'), S('u', 'URL', 'https://quicktoolhub.com/tools/pdf-merger'), A('d', 'Meta description', 'Use 500+ free online tools: PDF, image, finance, SEO and developer utilities. No signup.', { rows: 3 })], 'Preview Snippet', v => { const t = need(v, 't'), d = String(v.d || ''), u = String(v.u || ''), tw = t.length * 9.2, dl = d.length; let host = u, path = ''; try { const x = new URL(/^https?:/.test(u) ? u : 'https://' + u); host = x.hostname; path = x.pathname.split('/').filter(Boolean).join(' › '); } catch (e) {} const tt = tw > 600 ? t.slice(0, 58).trim() + '…' : t, dd = dl > 160 ? d.slice(0, 157).trim() + '…' : d; return '<div style="padding:16px;border:1px solid rgba(128,128,128,.35);border-radius:10px;background:#fff;color:#202124;font-family:Arial,sans-serif;max-width:620px"><div style="font-size:14px;color:#4d5156">' + esc(host) + (path ? ' › ' + esc(path) : '') + '</div><div style="font-size:20px;color:#1a0dab;line-height:1.3;margin:2px 0">' + esc(tt) + '</div><div style="font-size:14px;color:#4d5156;line-height:1.58">' + esc(dd) + '</div></div>' + kv([['Title length', t.length + ' chars (~' + Math.round(tw) + ' px) ' + (tw > 600 ? '⚠ may truncate' : '✅')], ['Description length', dl + ' chars ' + (dl > 160 ? '⚠ may truncate' : dl < 70 ? '⚠ a bit short' : '✅')]]); });
-  push('meta-tag-generator', 'Meta Tag Generator', SEO, 'fa-solid fa-tags', 'Generate SEO meta tags: title, description, robots, canonical, viewport and more.', [S('t', 'Title', 'My Awesome Page'), A('d', 'Description', 'A short summary of this page (150–160 characters).', { rows: 3 }), S('k', 'Keywords (comma separated)', 'tools, free, online'), S('a', 'Author', 'Your Name'), S('c', 'Canonical URL', 'https://example.com/page'), SEL('r', 'Robots', ['index, follow', 'noindex, follow', 'index, nofollow', 'noindex, nofollow']), S('l', 'Language code', 'en', { value: 'en' })], 'Generate Tags', v => { const t = need(v, 't', 'Enter a title.'), L = ['<meta charset="UTF-8">', '<meta name="viewport" content="width=device-width, initial-scale=1.0">', '<title>' + esc(t) + '</title>']; if (v.d) L.push('<meta name="description" content="' + esc(v.d) + '">'); if (v.k) L.push('<meta name="keywords" content="' + esc(v.k) + '">'); if (v.a) L.push('<meta name="author" content="' + esc(v.a) + '">'); L.push('<meta name="robots" content="' + v.r + '">'); if (v.c) L.push('<link rel="canonical" href="' + esc(v.c) + '">'); return copyArea(L.join('\n'), 9); });
-  push('open-graph-twitter-card-generator', 'Open Graph & Twitter Card Generator', SEO, 'fa-brands fa-twitter', 'Generate Open Graph and Twitter Card tags for rich social previews.', [S('t', 'Title', 'My Page Title'), A('d', 'Description', 'Page description for social sharing.', { rows: 3 }), S('u', 'Page URL', 'https://example.com/page'), S('i', 'Image URL (1200×630 recommended)', 'https://example.com/og.jpg'), S('s', 'Site name', 'QuickToolHub'), S('tw', 'Twitter @handle (optional)', '@quicktoolhub'), SEL('ty', 'Twitter card', ['summary_large_image', 'summary'])], 'Generate Tags', v => { const t = need(v, 't', 'Enter a title.'), p = (k, x) => x ? '<meta property="' + k + '" content="' + esc(x) + '">' : '', n = (k, x) => x ? '<meta name="' + k + '" content="' + esc(x) + '">' : ''; return copyArea([p('og:type', 'website'), p('og:title', t), p('og:description', v.d), p('og:url', v.u), p('og:image', v.i), p('og:site_name', v.s), n('twitter:card', v.ty), n('twitter:title', t), n('twitter:description', v.d), n('twitter:image', v.i), n('twitter:site', v.tw)].filter(Boolean).join('\n'), 12); });
-  push('robots-txt-generator', 'Robots.txt Generator', SEO, 'fa-solid fa-robot', 'Create a robots.txt file with allow/disallow rules and sitemap.', [S('ua', 'User-agent', '*', { value: '*' }), A('dis', 'Disallow paths (one per line)', '/admin/\n/private/\n/cart', { rows: 4 }), A('al', 'Allow paths (one per line)', '/admin/public/', { rows: 2 }), N('cd', 'Crawl-delay (seconds, optional)', '', { value: '' }), S('sm', 'Sitemap URL', 'https://example.com/sitemap.xml'), SEL('ai', 'Block AI training crawlers (GPTBot, CCBot…)', ['No', 'Yes'])], 'Generate robots.txt', v => { const l = x => String(x || '').split('\n').map(s => s.trim()).filter(Boolean); let r = 'User-agent: ' + (v.ua || '*') + '\n'; const d = l(v.dis); if (d.length) d.forEach(x => r += 'Disallow: ' + x + '\n'); else r += 'Disallow:\n'; l(v.al).forEach(x => r += 'Allow: ' + x + '\n'); if (isFinite(num(v.cd))) r += 'Crawl-delay: ' + num(v.cd) + '\n'; if (v.ai === 'Yes') ['GPTBot', 'CCBot', 'Google-Extended', 'anthropic-ai', 'ClaudeBot', 'PerplexityBot'].forEach(b => r += '\nUser-agent: ' + b + '\nDisallow: /\n'); if (v.sm) r += '\nSitemap: ' + v.sm + '\n'; return copyArea(r, 12); });
-  push('xml-sitemap-generator', 'XML Sitemap Generator', SEO, 'fa-solid fa-sitemap', 'Turn a list of URLs into a valid sitemap.xml.', [A('u', 'URLs (one per line)', 'https://example.com/\nhttps://example.com/about\nhttps://example.com/tools', { rows: 8 }), SEL('f', 'Change frequency', ['weekly', 'daily', 'hourly', 'monthly', 'yearly', 'always', 'never']), SEL('p', 'Priority', ['0.8', '1.0', '0.9', '0.7', '0.5', '0.3']), SEL('lm', 'Add lastmod (today)', ['Yes', 'No'])], 'Generate Sitemap', v => { const u = [...new Set(need(v, 'u').split('\n').map(s => s.trim()).filter(Boolean))]; const bad2 = u.find(x => !/^https?:\/\//i.test(x)); if (bad2) return err('Every URL must start with http:// or https:// — check: ' + bad2); if (u.length > 50000) return err('A sitemap may hold at most 50,000 URLs.'); const d = new Date().toISOString().slice(0, 10); return '<div style="margin-bottom:6px;font-weight:600">' + u.length + ' URLs</div>' + copyArea('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' + u.map(x => '  <url>\n    <loc>' + esc(x) + '</loc>\n' + (v.lm === 'Yes' ? '    <lastmod>' + d + '</lastmod>\n' : '') + '    <changefreq>' + v.f + '</changefreq>\n    <priority>' + v.p + '</priority>\n  </url>').join('\n') + '\n</urlset>', 14); });
-  const STOP = new Set('a an the and or but if of at by for with to from in on is are was were be been it its this that these those as not no so than too very can will just do does did has have had i you he she we they them his her our your their my me us'.split(' '));
-  push('keyword-density-checker', 'Keyword Density Checker', SEO, 'fa-solid fa-key', 'Find the most frequent words and phrases in your content.', [A('t', 'Page content', 'Paste your article or page text here…', { rows: 10 }), SEL('s', 'Ignore stop words', ['Yes', 'No'])], 'Analyze', v => { const t = need(v, 't').toLowerCase(), w = t.match(/[a-z0-9\u00c0-\u024f'’-]+/g) || []; if (w.length < 5) return err('Enter more text.'); const f = w.filter(x => v.s === 'No' || !STOP.has(x)), cnt = (arr, n) => { const m = {}; for (let i = 0; i <= arr.length - n; i++) { const g = arr.slice(i, i + n); if (n > 1 && (STOP.has(g[0]) || STOP.has(g[n - 1]))) continue; const k = g.join(' '); m[k] = (m[k] || 0) + 1; } return Object.entries(m).filter(e => e[1] > 1 || n === 1).sort((a, b) => b[1] - a[1]).slice(0, 10); }, tb = (e, tot) => table(['Phrase', 'Count', 'Density'], e.map(x => [esc(x[0]), x[1], fmt(x[1] / tot * 100, 2) + '%']).map(r => r)).replace(/text-align:right/g, 'text-align:left'); return kv([['Total words', w.length], ['Unique words', new Set(w).size]]) + '<h4>Single words</h4>' + tb(cnt(f, 1), w.length) + '<h4>2-word phrases</h4>' + (cnt(w, 2).length ? tb(cnt(w, 2), w.length) : '<i>No repeated phrases.</i>') + '<h4>3-word phrases</h4>' + (cnt(w, 3).length ? tb(cnt(w, 3), w.length) : '<i>No repeated phrases.</i>'); });
-  push('url-slugifier', 'URL Slug Generator (Slugifier)', SEO, 'fa-solid fa-link', 'Turn titles into clean, SEO-friendly URL slugs.', [A('t', 'Titles (one per line)', 'Best Free Online PDF Tools in 2026!\nCafé & Crêpes: A Guide', { rows: 5 }), SEL('s', 'Separator', ['-', '_']), N('m', 'Max length (0 = unlimited)', '0', { value: 0 }), SEL('st', 'Remove stop words', ['No', 'Yes'])], 'Create Slugs', v => { const mx = opt(v.m); return copyArea(need(v, 't').split('\n').filter(x => x.trim()).map(x => { let w = x.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim().split(' '); if (v.st === 'Yes') w = w.filter(y => !STOP.has(y)); let s = w.join(v.s); if (mx > 0 && s.length > mx) s = s.slice(0, mx).replace(new RegExp('\\' + v.s + '[^' + v.s + ']*$'), ''); return s; }).join('\n'), 6); });
-  push('reading-time-estimator', 'Reading Time Estimator', SEO, 'fa-solid fa-book-open', 'Estimate how long an article takes to read or speak.', [A('t', 'Article text', 'Paste your article…', { rows: 10 }), N('wpm', 'Reading speed (words/min)', '238', { value: 238 })], 'Estimate Time', v => { const w = (need(v, 't').match(/\S+/g) || []).length, s = num(v.wpm) || 238, m = w / s, fm = x => x < 1 ? Math.max(Math.round(x * 60), 1) + ' sec' : Math.round(x) + ' min'; return kv([['Words', w], ['Reading time', '<b>' + fm(m) + '</b>'], ['Skimming (≈ 2×)', fm(m / 2)], ['Speaking time (150 wpm)', fm(w / 150)], ['Images adds (est.)', '+12 sec each']]); });
-  push('utm-campaign-link-builder', 'UTM Campaign Link Builder', SEO, 'fa-solid fa-bullhorn', 'Build Google Analytics UTM tracking URLs.', [S('u', 'Website URL', 'https://example.com/landing'), S('s', 'Campaign source *', 'newsletter'), S('m', 'Campaign medium *', 'email'), S('c', 'Campaign name *', 'spring_sale'), S('t', 'Campaign term (optional)', ''), S('co', 'Campaign content (optional)', '')], 'Build UTM Link', v => { let u; try { u = new URL(/^https?:/.test(v.u) ? v.u : 'https://' + need(v, 'u', 'Enter a URL.')); } catch (e) { return err('Invalid URL.'); } [['s', 'utm_source'], ['m', 'utm_medium'], ['c', 'utm_campaign'], ['t', 'utm_term'], ['co', 'utm_content']].forEach(([k, p]) => { const x = String(v[k] || '').trim(); if (x) u.searchParams.set(p, x.toLowerCase().replace(/\s+/g, '_')); else if ('smc'.includes(k)) throw new Error('Source, medium and campaign name are required.'); }); return copyArea(u.toString(), 3); });
-  push('schema-markup-generator', 'Schema.org JSON-LD Markup Generator', SEO, 'fa-solid fa-diagram-project', 'Generate JSON-LD structured data for Article, Product, FAQ, Organization, LocalBusiness, Event and more.', [SEL('ty', 'Schema type', ['Article', 'Product', 'FAQPage', 'Organization', 'LocalBusiness', 'Event', 'Person', 'WebSite']), S('n', 'Name / headline', 'My Product or Article Title'), S('u', 'URL', 'https://example.com/page'), A('d', 'Description', 'Short description', { rows: 2 }), S('i', 'Image URL', 'https://example.com/image.jpg'), S('x1', 'Extra 1: price (Product) · author (Article) · phone (LocalBusiness) · start date YYYY-MM-DD (Event) · job title (Person)', ''), S('x2', 'Extra 2: currency (Product) · address (LocalBusiness) · location (Event)', ''), A('faq', 'FAQ pairs for FAQPage: Question | Answer (one per line)', 'What is X? | X is…\nHow much? | Free.', { rows: 3 })], 'Generate JSON-LD', v => { const ty = v.ty, o = { '@context': 'https://schema.org', '@type': ty }; const set = (k, x) => { if (x && String(x).trim()) o[k] = String(x).trim(); }; if (ty === 'Article') { set('headline', v.n); set('url', v.u); set('description', v.d); set('image', v.i); if (v.x1) o.author = { '@type': 'Person', name: v.x1 }; o.datePublished = new Date().toISOString().slice(0, 10); } else if (ty === 'Product') { set('name', v.n); set('url', v.u); set('description', v.d); set('image', v.i); if (v.x1) o.offers = { '@type': 'Offer', price: v.x1, priceCurrency: v.x2 || 'USD', availability: 'https://schema.org/InStock' }; } else if (ty === 'FAQPage') { o.mainEntity = String(v.faq || '').split('\n').filter(l => l.includes('|')).map(l => { const [q, ...a] = l.split('|'); return { '@type': 'Question', name: q.trim(), acceptedAnswer: { '@type': 'Answer', text: a.join('|').trim() } }; }); if (!o.mainEntity.length) return err('Add FAQ lines as: Question | Answer'); } else if (ty === 'Event') { set('name', v.n); set('url', v.u); set('description', v.d); set('image', v.i); set('startDate', v.x1); if (v.x2) o.location = { '@type': 'Place', name: v.x2 }; } else if (ty === 'Person') { set('name', v.n); set('url', v.u); set('description', v.d); set('image', v.i); set('jobTitle', v.x1); } else if (ty === 'WebSite') { set('name', v.n); set('url', v.u); if (v.u) o.potentialAction = { '@type': 'SearchAction', target: v.u.replace(/\/$/, '') + '/search?q={search_term_string}', 'query-input': 'required name=search_term_string' }; } else { set('name', v.n); set('url', v.u); set('description', v.d); set('logo', v.i); if (ty === 'LocalBusiness') { set('telephone', v.x1); if (v.x2) o.address = { '@type': 'PostalAddress', streetAddress: v.x2 }; } } return copyArea('<script type="application/ld+json">\n' + JSON.stringify(o, null, 2) + '\n<\/script>', 14); });
-  push('hreflang-tag-generator', 'Hreflang Tag Generator', SEO, 'fa-solid fa-language', 'Generate hreflang link tags for multilingual and multi-region pages.', [A('p', 'One per line: language-code URL', 'en-us https://example.com/\nen-gb https://example.com/uk/\nhi-in https://example.com/in/\nde https://example.com/de/', { rows: 6 }), S('x', 'x-default URL (optional)', 'https://example.com/')], 'Generate Tags', v => { const L = need(v, 'p').split('\n').map(s => s.trim().split(/\s+/)).filter(x => x.length >= 2); if (!L.length) return err('Use: language-code URL, one per line.'); const r = L.map(x => '<link rel="alternate" hreflang="' + esc(x[0]) + '" href="' + esc(x[1]) + '" />'); if (v.x) r.push('<link rel="alternate" hreflang="x-default" href="' + esc(v.x) + '" />'); return copyArea(r.join('\n'), 8); });
-  push('title-meta-length-checker', 'Title & Meta Description Length Checker', SEO, 'fa-solid fa-ruler', 'Check whether your title and description fit Google\'s display limits.', [S('t', 'Title', 'Free Online Tools'), A('d', 'Meta description', '', { rows: 3 })], 'Check Length', v => { const t = String(v.t || ''), d = String(v.d || ''); const st = (n, lo, hi) => n === 0 ? '—' : n < lo ? '⚠ too short' : n > hi ? '❌ too long' : '✅ good'; return kv([['Title', t.length + ' chars (' + st(t.length, 30, 60) + ', ideal 30–60)'], ['Description', d.length + ' chars (' + st(d.length, 70, 160) + ', ideal 70–160)']]); });
-
-  return out;
-})(),
-
-/* ---------- 6. PDF COMPLETE SUITE ---------- */
-...(function () {
-  'use strict';
-  const { esc, num, opt, bad, fmt, err, kv, table, scroll, pre, load, readAs, link, kb, files, ranges, toBlob, N, S, A, SEL, F, RNG, COL, T } = globalThis.QTH;
-  const PD = 'PDF Tools';
-  const CDN = 'https://cdnjs.cloudflare.com/ajax/libs/';
-  const lib = async () => { await load(CDN + 'pdf-lib/1.17.1/pdf-lib.min.js'); return PDFLib; };
-  const jspdf = async () => { await load(CDN + 'jspdf/2.5.1/jspdf.umd.min.js'); return window.jspdf.jsPDF; };
-  const pdfjs = async () => { await load(CDN + 'pdf.js/3.11.174/pdf.min.js'); pdfjsLib.GlobalWorkerOptions.workerSrc = CDN + 'pdf.js/3.11.174/pdf.worker.min.js'; return pdfjsLib; };
-  const out = []; const push = (...a) => out.push(T(...a));
-  const one = (v, k) => { const f = files(v[k])[0]; if (!f) throw new Error('Please choose a file first.'); return f; };
-  const bytes = f => readAs(f, 'readAsArrayBuffer');
-  const loadPdf = async f => { const L = await lib(); return L.PDFDocument.load(await bytes(f), { ignoreEncryption: true }); };
-  const pdfOut = async (doc, name, rows) => { const b = await doc.save(); return '<div class="qt-result">' + link(new Blob([b], { type: 'application/pdf' }), name) + (rows ? kv(rows.concat([['Size', kb(b.length)]])) : '') + '</div>'; };
-  const PDFIN = F('f', 'Choose PDF file', 'application/pdf,.pdf');
-  const SIZES = { a4: [595.28, 841.89], letter: [612, 792], legal: [612, 1008], a3: [841.89, 1190.55], a5: [419.53, 595.28] };
-  const base = f => f.name.replace(/\.[^.]+$/, '');
-  const hexRgb = (L, h) => { const m = /^#?([0-9a-f]{6})$/i.exec(h || ''); const n = m ? parseInt(m[1], 16) : 0; return L.rgb((n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255); };
-
-  push('pdf-to-text', 'PDF to Text Converter', PD, 'fa-solid fa-file-lines', 'Extract selectable text from a PDF in your browser (nothing is uploaded).', [PDFIN, S('r', 'Pages (optional)', 'e.g. 1-3,5', { value: '' })], 'Extract Text', async v => {
-    const f = one(v, 'f'), P = await pdfjs(), pdf = await P.getDocument({ data: new Uint8Array(await bytes(f)) }).promise;
-    const pages = String(v.r || '').trim() ? ranges(v.r, pdf.numPages).map(i => i + 1) : Array.from({ length: pdf.numPages }, (_, i) => i + 1);
-    let txt = ''; for (const n of pages) { const tc = await (await pdf.getPage(n)).getTextContent(); let y = null, line = ''; tc.items.forEach(it => { const yy = it.transform[5]; if (y !== null && Math.abs(yy - y) > 2) { txt += line.trim() + '\n'; line = ''; } line += it.str + (it.hasEOL ? '\n' : ' '); y = yy; }); txt += line.trim() + '\n\n'; }
-    if (!txt.trim()) return err('No selectable text found — this PDF may be a scanned image (needs OCR).');
-    return kv([['Pages read', pages.length + ' of ' + pdf.numPages], ['Characters', txt.length.toLocaleString()], ['Words', (txt.match(/\S+/g) || []).length.toLocaleString()]]) + link(new Blob([txt], { type: 'text/plain' }), base(f) + '.txt', 'Download .txt') + '<textarea readonly rows="14" style="width:100%;margin-top:8px">' + esc(txt) + '</textarea>';
-  });
-  push('text-to-pdf', 'Text to PDF Converter', PD, 'fa-solid fa-file-pdf', 'Turn plain text into a paginated PDF with custom page size, font and margins.', [A('t', 'Text', 'Type or paste your text here…', { rows: 10 }), S('ti', 'Document title (optional)', ''), SEL('s', 'Page size', [['a4', 'A4'], ['letter', 'US Letter'], ['legal', 'US Legal'], ['a5', 'A5']]), SEL('fo', 'Font', [['helvetica', 'Helvetica'], ['times', 'Times'], ['courier', 'Courier']]), N('fs', 'Font size (pt)', '12', { value: 12 }), N('m', 'Margin (pt)', '50', { value: 50 })], 'Create PDF', async v => {
-    const txt = String(v.t || ''); if (!txt.trim()) return err('Please enter some text.');
-    const J = await jspdf(), d = new J({ unit: 'pt', format: v.s }), W = d.internal.pageSize.getWidth(), Hh = d.internal.pageSize.getHeight(), m = opt(v.m) || 50, fs = num(v.fs) || 12;
-    d.setFont(v.fo, 'normal'); d.setFontSize(fs); let y = m + fs;
-    if (v.ti) { d.setFont(v.fo, 'bold'); d.setFontSize(fs + 6); d.text(String(v.ti), m, y); y += fs * 2.2; d.setFont(v.fo, 'normal'); d.setFontSize(fs); }
-    d.splitTextToSize(txt, W - 2 * m).forEach(l => { if (y > Hh - m) { d.addPage(); y = m + fs; } d.text(l, m, y); y += fs * 1.35; });
-    return '<div class="qt-result">' + link(d.output('blob'), (String(v.ti || 'document').replace(/\W+/g, '-').toLowerCase() || 'document') + '.pdf') + kv([['Pages', d.getNumberOfPages()]]) + '</div>';
-  });
-  push('pdf-merger', 'PDF Merger', PD, 'fa-solid fa-object-group', 'Combine several PDF files into one (files stay on your device).', [F('f', 'Choose PDF files (select 2 or more, in order)', 'application/pdf,.pdf', true)], 'Merge PDFs', async v => {
-    const fl = files(v.f); if (fl.length < 2) return err('Select at least two PDF files.'); const L = await lib(), m = await L.PDFDocument.create(); let n = 0;
-    for (const f of fl) { const d = await L.PDFDocument.load(await bytes(f), { ignoreEncryption: true }); (await m.copyPages(d, d.getPageIndices())).forEach(p => { m.addPage(p); n++; }); }
-    return pdfOut(m, 'merged.pdf', [['Files merged', fl.length], ['Total pages', n]]);
-  });
-  push('pdf-splitter', 'PDF Splitter & Page Extractor', PD, 'fa-solid fa-scissors', 'Extract page ranges into a new PDF, or split every page into its own file.', [PDFIN, SEL('m', 'Mode', [['range', 'Extract pages into one PDF'], ['each', 'Split into one PDF per page (max 50)']]), S('r', 'Pages (range mode)', 'e.g. 1-3,7,10-12', { value: '' })], 'Split PDF', async v => {
-    const f = one(v, 'f'), L = await lib(), src = await loadPdf(f), n = src.getPageCount();
-    if (v.m === 'each') { if (n > 50) return err('Too many pages for per-page split (' + n + '). Use range mode.'); let h = ''; for (let i = 0; i < n; i++) { const d = await L.PDFDocument.create(); d.addPage((await d.copyPages(src, [i]))[0]); h += link(new Blob([await d.save()], { type: 'application/pdf' }), base(f) + '-page-' + (i + 1) + '.pdf', 'Page ' + (i + 1)); } return '<div class="qt-result">' + h + '</div>'; }
-    const idx = ranges(v.r, n), d = await L.PDFDocument.create(); (await d.copyPages(src, idx)).forEach(p => d.addPage(p)); return pdfOut(d, base(f) + '-extract.pdf', [['Source pages', n], ['Pages extracted', idx.length]]);
-  });
-  push('pdf-page-deleter', 'Delete Pages from PDF', PD, 'fa-solid fa-trash-can', 'Remove unwanted pages from a PDF.', [PDFIN, S('r', 'Pages to delete', 'e.g. 2,5-7')], 'Delete Pages', async v => { const f = one(v, 'f'), d = await loadPdf(f), n = d.getPageCount(), idx = [...new Set(ranges(v.r, n))].sort((a, b) => b - a); if (idx.length >= n) return err('You cannot delete every page.'); idx.forEach(i => d.removePage(i)); return pdfOut(d, base(f) + '-edited.pdf', [['Pages removed', idx.length], ['Pages remaining', d.getPageCount()]]); });
-  push('image-to-pdf', 'Image to PDF Converter', PD, 'fa-solid fa-file-image', 'Combine JPG, PNG or WebP images into a single PDF.', [F('f', 'Choose images (in order)', 'image/*', true), SEL('s', 'Page size', [['fit', 'Fit to image'], ['a4', 'A4'], ['letter', 'US Letter']]), N('m', 'Margin (pt, A4/Letter)', '20', { value: 20 })], 'Create PDF', async v => {
-    const fl = files(v.f); if (!fl.length) return err('Choose at least one image.'); const L = await lib(), d = await L.PDFDocument.create();
-    for (const f of fl) {
-      let b = new Uint8Array(await bytes(f)), im; if (f.type === 'image/jpeg') im = await d.embedJpg(b); else if (f.type === 'image/png') im = await d.embedPng(b); else { const i = await globalThis.QTH.imgFrom(f), c = document.createElement('canvas'); c.width = i.naturalWidth; c.height = i.naturalHeight; const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(i, 0, 0); im = await d.embedJpg(new Uint8Array(await (await toBlob(c, 'image/jpeg', .92)).arrayBuffer())); }
-      let pw, ph, dw = im.width, dh = im.height, x = 0, y = 0;
-      if (v.s === 'fit') { const k = Math.min(1, 1200 / Math.max(dw, dh)); pw = dw = dw * k; ph = dh = dh * k; } else { let [w, h] = SIZES[v.s]; if (im.width > im.height) [w, h] = [h, w]; pw = w; ph = h; const mg = opt(v.m), k = Math.min((w - 2 * mg) / im.width, (h - 2 * mg) / im.height); dw = im.width * k; dh = im.height * k; x = (w - dw) / 2; y = (h - dh) / 2; }
-      d.addPage([pw, ph]).drawImage(im, { x, y, width: dw, height: dh });
-    }
-    return pdfOut(d, 'images.pdf', [['Images', fl.length], ['Pages', d.getPageCount()]]);
-  });
-  push('pdf-page-counter', 'PDF Page Counter & Info', PD, 'fa-solid fa-list-ol', 'Count pages and see page size, PDF version and file size.', [PDFIN], 'Count Pages', async v => { const f = one(v, 'f'), d = await loadPdf(f), p = d.getPage(0), s = p.getSize(), head = new TextDecoder().decode((await bytes(f.slice(0, 12)))), ver = (/%PDF-(\d\.\d)/.exec(head) || [])[1] || '—', mm = x => fmt(x / 72 * 25.4, 0); const std = Object.entries(SIZES).find(([k, a]) => (Math.abs(a[0] - s.width) < 3 && Math.abs(a[1] - s.height) < 3) || (Math.abs(a[1] - s.width) < 3 && Math.abs(a[0] - s.height) < 3)); return kv([['Pages', '<b>' + d.getPageCount() + '</b>'], ['Page 1 size', fmt(s.width, 0) + ' × ' + fmt(s.height, 0) + ' pt (' + mm(s.width) + ' × ' + mm(s.height) + ' mm)' + (std ? ' — ' + std[0].toUpperCase() : '')], ['PDF version', ver], ['File size', kb(f.size)], ['Encrypted', d.isEncrypted ? 'Yes' : 'No']]); });
-  push('pdf-metadata-reader', 'PDF Metadata Reader', PD, 'fa-solid fa-circle-info', 'Read title, author, creator, producer, dates and keywords stored in a PDF.', [PDFIN], 'Read Metadata', async v => { const f = one(v, 'f'), d = await loadPdf(f), dt = x => x ? x.toISOString().replace('T', ' ').slice(0, 19) + ' UTC' : '—', e = x => esc(x || '—'); return kv([['Title', e(d.getTitle())], ['Author', e(d.getAuthor())], ['Subject', e(d.getSubject())], ['Keywords', e(d.getKeywords())], ['Creator', e(d.getCreator())], ['Producer', e(d.getProducer())], ['Created', dt(d.getCreationDate())], ['Modified', dt(d.getModificationDate())], ['Pages', d.getPageCount()], ['File size', kb(f.size)]]); });
-  push('pdf-metadata-editor', 'PDF Metadata Editor', PD, 'fa-solid fa-pen-to-square', 'Edit PDF title, author, subject and keywords.', [PDFIN, S('t', 'Title', ''), S('a', 'Author', ''), S('s', 'Subject', ''), S('k', 'Keywords (comma separated)', '')], 'Save PDF', async v => { const f = one(v, 'f'), d = await loadPdf(f); if (v.t) d.setTitle(v.t); if (v.a) d.setAuthor(v.a); if (v.s) d.setSubject(v.s); if (v.k) d.setKeywords(String(v.k).split(',').map(x => x.trim()).filter(Boolean)); d.setModificationDate(new Date()); return pdfOut(d, base(f) + '-meta.pdf'); });
-  const thumb = async (bytesArr, scale) => { const P = await pdfjs(), pdf = await P.getDocument({ data: bytesArr.slice() }).promise, pg = await pdf.getPage(1), vp = pg.getViewport({ scale }), c = document.createElement('canvas'); c.width = vp.width; c.height = vp.height; await pg.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise; return c.toDataURL('image/png'); };
-  push('pdf-rotator', 'PDF Rotator with Preview', PD, 'fa-solid fa-rotate-right', 'Rotate all, odd, even or selected pages and preview the first page.', [PDFIN, SEL('a', 'Rotate', [['90', '90° clockwise'], ['180', '180°'], ['270', '90° counter-clockwise']]), SEL('w', 'Pages', [['all', 'All pages'], ['odd', 'Odd pages'], ['even', 'Even pages'], ['custom', 'Custom range']]), S('r', 'Custom range', 'e.g. 1-3,6', { value: '' })], 'Rotate PDF', async v => { const f = one(v, 'f'), L = await lib(), d = await loadPdf(f), n = d.getPageCount(); let idx = d.getPageIndices(); if (v.w === 'odd') idx = idx.filter(i => i % 2 === 0); else if (v.w === 'even') idx = idx.filter(i => i % 2 === 1); else if (v.w === 'custom') idx = ranges(v.r, n); idx.forEach(i => { const p = d.getPage(i); p.setRotation(L.degrees((p.getRotation().angle + +v.a) % 360)); }); const b = await d.save(); let pv = ''; try { pv = '<img alt="Page 1 preview" style="max-width:260px;border:1px solid rgba(128,128,128,.4);margin:8px 0;display:block" src="' + await thumb(new Uint8Array(b), .5) + '">'; } catch (e) { } return '<div class="qt-result">' + pv + link(new Blob([b], { type: 'application/pdf' }), base(f) + '-rotated.pdf') + kv([['Pages rotated', idx.length + ' of ' + n]]) + '</div>'; });
-  push('pdf-watermark', 'PDF Watermark Applier', PD, 'fa-solid fa-stamp', 'Stamp text (CONFIDENTIAL, DRAFT…) across every page of a PDF.', [PDFIN, S('t', 'Watermark text (Latin characters)', 'CONFIDENTIAL', { value: 'CONFIDENTIAL' }), N('s', 'Font size (pt)', '60', { value: 60 }), COL('c', 'Color', '#ff0000'), RNG('o', 'Opacity %', 5, 100, 25), N('r', 'Rotation (degrees)', '45', { value: 45 }), SEL('p', 'Layout', [['center', 'Centered'], ['tile', 'Tiled']])], 'Apply Watermark', async v => {
-    const f = one(v, 'f'), L = await lib(), d = await loadPdf(f), t = String(v.t || '').trim(); if (!t) return err('Enter watermark text.'); const font = await d.embedFont(L.StandardFonts.HelveticaBold), s = num(v.s) || 60, th = (opt(v.r) % 360) * Math.PI / 180, col = hexRgb(L, v.c), op = (+v.o || 25) / 100, w = font.widthOfTextAtSize(t, s), b = s * 0.3;
-    const draw = (pg, cx, cy) => pg.drawText(t, { x: cx - (w / 2 * Math.cos(th) - b * Math.sin(th)), y: cy - (w / 2 * Math.sin(th) + b * Math.cos(th)), size: s, font, color: col, opacity: op, rotate: L.degrees(opt(v.r)) });
-    try { d.getPages().forEach(pg => { const { width: W, height: Hh } = pg.getSize(); if (v.p === 'center') draw(pg, W / 2, Hh / 2); else for (let y = Hh / 6; y < Hh + s; y += Math.max(w * .8, 150)) for (let x = 0; x < W + w; x += w * 1.3) draw(pg, x, y); }); } catch (e) { return err('Watermark text supports basic Latin characters only.'); }
-    return pdfOut(d, base(f) + '-watermarked.pdf', [['Pages stamped', d.getPageCount()]]);
-  });
-  push('pdf-page-numbers', 'Add Page Numbers to PDF', PD, 'fa-solid fa-hashtag', 'Insert "Page X of N" numbering into a PDF.', [PDFIN, SEL('p', 'Position', [['bc', 'Bottom center'], ['br', 'Bottom right'], ['bl', 'Bottom left'], ['tc', 'Top center'], ['tr', 'Top right']]), SEL('fm', 'Format', [['n', '1'], ['pn', 'Page 1'], ['nn', 'Page 1 of N'], ['d', '- 1 -']]), N('s', 'Font size', '10', { value: 10 }), N('st', 'Start number', '1', { value: 1 })], 'Number Pages', async v => { const f = one(v, 'f'), L = await lib(), d = await loadPdf(f), font = await d.embedFont(L.StandardFonts.Helvetica), s = num(v.s) || 10, st = Math.round(num(v.st)) || 1, N2 = d.getPageCount(); d.getPages().forEach((pg, i) => { const n = i + st, t = v.fm === 'n' ? '' + n : v.fm === 'pn' ? 'Page ' + n : v.fm === 'nn' ? 'Page ' + n + ' of ' + (N2 + st - 1) : '- ' + n + ' -', w = font.widthOfTextAtSize(t, s), { width: W, height: Hh } = pg.getSize(), x = v.p.endsWith('c') ? (W - w) / 2 : v.p.endsWith('r') ? W - w - 36 : 36, y = v.p[0] === 'b' ? 28 : Hh - 28 - s; pg.drawText(t, { x, y, size: s, font, color: L.rgb(.2, .2, .2) }); }); return pdfOut(d, base(f) + '-numbered.pdf', [['Pages numbered', N2]]); });
-  push('pdf-to-images', 'PDF to Image Converter (PNG / JPG)', PD, 'fa-solid fa-images', 'Render PDF pages as PNG or JPG images.', [PDFIN, S('r', 'Pages (max 20)', 'e.g. 1-3', { value: '1' }), SEL('t', 'Format', [['image/png', 'PNG'], ['image/jpeg', 'JPG']]), SEL('q', 'Quality', [['1.5', 'Standard (≈110 dpi)'], ['2.5', 'High (≈180 dpi)'], ['1', 'Small (72 dpi)']])], 'Convert Pages', async v => { const f = one(v, 'f'), P = await pdfjs(), pdf = await P.getDocument({ data: new Uint8Array(await bytes(f)) }).promise, idx = ranges(v.r, pdf.numPages).slice(0, 20); let h = ''; for (const i of idx) { const pg = await pdf.getPage(i + 1), vp = pg.getViewport({ scale: +v.q }), c = document.createElement('canvas'); c.width = vp.width; c.height = vp.height; const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); await pg.render({ canvasContext: x, viewport: vp }).promise; const b = await toBlob(c, v.t, .92); h += '<div style="display:inline-block;margin:8px;text-align:center"><img style="max-width:180px;border:1px solid rgba(128,128,128,.4)" src="' + URL.createObjectURL(b) + '"><br>' + link(b, base(f) + '-p' + (i + 1) + (v.t === 'image/png' ? '.png' : '.jpg'), 'Page ' + (i + 1)) + '</div>'; } return '<div class="qt-result">' + h + '</div>'; });
-  push('html-to-pdf-formatter', 'HTML to PDF Converter', PD, 'fa-brands fa-html5', 'Render HTML (with inline CSS) into a multi-page PDF.', [A('h', 'HTML', '<h1>Invoice #1001</h1>\n<p style="color:#555">Thank you for your business.</p>\n<table border="1" cellpadding="6"><tr><td>Item</td><td>$20</td></tr></table>', { rows: 10 }), SEL('s', 'Page size', [['a4', 'A4'], ['letter', 'US Letter']])], 'Create PDF', async v => {
-    const raw = String(v.h || ''); if (!raw.trim()) return err('Enter some HTML.'); await load(CDN + 'html2canvas/1.4.1/html2canvas.min.js'); const J = await jspdf();
-    const doc = new DOMParser().parseFromString(raw, 'text/html'); doc.querySelectorAll('script,iframe,object,embed,link[rel=import]').forEach(n => n.remove()); doc.querySelectorAll('*').forEach(n => [...n.attributes].forEach(a => { if (/^on/i.test(a.name) || /^\s*javascript:/i.test(a.value)) n.removeAttribute(a.name); }));
-    const wrap = document.createElement('div'); wrap.style.cssText = 'position:fixed;left:-10000px;top:0;width:794px;background:#fff;color:#000;font-family:Arial,sans-serif;font-size:14px'; wrap.innerHTML = doc.body.innerHTML; document.body.appendChild(wrap);
-    const d = new J({ unit: 'pt', format: v.s }), W = d.internal.pageSize.getWidth();
-    try { await new Promise((res, rej) => { try { d.html(wrap, { x: 20, y: 20, width: W - 40, windowWidth: 794, callback: res }); } catch (e) { rej(e); } }); } finally { wrap.remove(); }
-    return '<div class="qt-result">' + link(d.output('blob'), 'html-document.pdf') + kv([['Pages', d.getNumberOfPages()]]) + '</div>';
-  });
-
-  return out;
-})(),
-
-/* ---------- 7. PHOTO & IMAGE PROCESSING (HTML5 Canvas API) ---------- */
-...(function () {
-  'use strict';
-  const { esc, num, opt, bad, fmt, err, kv, table, readAs, imgFrom, link, kb, files, toBlob, N, S, A, SEL, F, RNG, COL, T } = globalThis.QTH;
-  const IM = 'Image Tools';
-  const out = []; const push = (...a) => out.push(T(...a));
-  const IMG = F('f', 'Choose image', 'image/*');
-  const FMTS = SEL('t', 'Output format', [['image/jpeg', 'JPG'], ['image/png', 'PNG'], ['image/webp', 'WebP']]);
-  const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
-  const one = (v, k) => { const f = files(v[k])[0]; if (!f) throw new Error('Please choose an image first.'); return f; };
-  const cv = (w, h) => { w = Math.max(1, Math.round(w)); h = Math.max(1, Math.round(h)); if (w * h > 2.68e8 || w > 32767 || h > 32767) throw new Error('Resulting image is too large for the browser (' + w + '×' + h + ').'); const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
-  const base = f => f.name.replace(/\.[^.]+$/, '');
-  const show = async (canvas, type, q, name, rows, orig) => { const b = await toBlob(canvas, type, q); if (!b) throw new Error('Your browser could not export this format.'); const u = URL.createObjectURL(b), fb = b.type !== type ? '<div style="color:#d97706">⚠ Your browser does not support ' + type.split('/')[1].toUpperCase() + ' export; saved as ' + b.type.split('/')[1].toUpperCase() + '.</div>' : ''; const info = [['Dimensions', canvas.width + ' × ' + canvas.height + ' px'], ['File size', kb(b.size)]]; if (orig) info.push(['Original size', kb(orig) + ' → ' + (b.size < orig ? '<b style="color:#16a34a">−' + fmt((1 - b.size / orig) * 100, 1) + '%</b>' : '+' + fmt((b.size / orig - 1) * 100, 1) + '%')]); return '<div class="qt-result">' + fb + '<img src="' + u + '" alt="Result preview" style="max-width:100%;max-height:420px;border-radius:8px;border:1px solid rgba(128,128,128,.35);background:repeating-conic-gradient(#ccc 0% 25%,#fff 0% 50%) 50%/16px 16px"><div style="margin:10px 0">' + link(b, name + '.' + (EXT[b.type] || 'png')) + '</div>' + kv(info.concat(rows || [])) + '</div>'; };
-  const flatten = (c, bg) => { const o = cv(c.width, c.height), x = o.getContext('2d'); x.fillStyle = bg; x.fillRect(0, 0, o.width, o.height); x.drawImage(c, 0, 0); return o; };
-  const draw = async f => { const i = await imgFrom(f), c = cv(i.naturalWidth, i.naturalHeight); c.getContext('2d').drawImage(i, 0, 0); return c; };
-
-  push('photo-resizer', 'Photo Resizer (Exact Pixels or Percentage)', IM, 'fa-solid fa-up-right-and-down-left-from-center', 'Resize images to exact pixel dimensions or a percentage, keeping quality.', [IMG, SEL('m', 'Resize by', [['px', 'Exact pixels'], ['pct', 'Percentage']]), N('w', 'Width (px) or % scale', '1280', { value: '' }), N('h', 'Height (px) — pixel mode only', '720', { value: '' }), SEL('k', 'Keep aspect ratio', ['Yes', 'No']), SEL('t', 'Output format', [['image/jpeg', 'JPG'], ['image/png', 'PNG'], ['image/webp', 'WebP']]), RNG('q', 'JPG/WebP quality', 30, 100, 92)], 'Resize Photo', async v => {
-    const f = one(v, 'f'), i = await imgFrom(f), ow = i.naturalWidth, oh = i.naturalHeight; let w = num(v.w), h = num(v.h);
-    if (v.m === 'pct') { if (bad(w) || w <= 0) return err('Enter a percentage greater than 0.'); h = oh * w / 100; w = ow * w / 100; } else if (v.k === 'Yes') { if (isFinite(w) && w > 0) h = oh * w / ow; else if (isFinite(h) && h > 0) w = ow * h / oh; else return err('Enter a width or height.'); } else if (bad(w, h) || w <= 0 || h <= 0) return err('Enter both width and height.');
-    const c = cv(w, h), x = c.getContext('2d'); x.imageSmoothingQuality = 'high'; if (v.t === 'image/jpeg') { x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); } x.drawImage(i, 0, 0, c.width, c.height); return show(c, v.t, v.q / 100, base(f) + '-' + c.width + 'x' + c.height, [['Original', ow + ' × ' + oh + ' px']], f.size);
-  });
-  push('image-compressor', 'Image Compressor (Quality Slider)', IM, 'fa-solid fa-compress', 'Shrink JPG, PNG or WebP file size with an adjustable quality slider.', [IMG, RNG('q', 'Quality %', 10, 100, 70), SEL('t', 'Output format', [['image/jpeg', 'JPG (best for photos)'], ['image/webp', 'WebP (smallest)']]), N('mw', 'Max width px (optional)', '1920', { value: '' })], 'Compress Image', async v => { const f = one(v, 'f'), i = await imgFrom(f); let w = i.naturalWidth, h = i.naturalHeight; const mw = num(v.mw); if (isFinite(mw) && mw > 0 && w > mw) { h = h * mw / w; w = mw; } const c = cv(w, h), x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.imageSmoothingQuality = 'high'; x.drawImage(i, 0, 0, c.width, c.height); return show(c, v.t, v.q / 100, base(f) + '-compressed', null, f.size); });
-  const PRE = { free: 0, '1:1': 1, '4:3': 4 / 3, '3:2': 3 / 2, '16:9': 16 / 9, '9:16': 9 / 16, '3:4': 3 / 4, '2:3': 2 / 3, '4:5': 4 / 5 };
-  push('photo-cropper', 'Photo Cropper', IM, 'fa-solid fa-crop-simple', 'Crop to a custom box or a centered preset ratio (1:1, 4:3, 16:9, 9:16…).', [IMG, SEL('p', 'Crop mode', [['free', 'Custom box (x, y, width, height)']].concat(Object.keys(PRE).filter(k => k !== 'free').map(k => [k, 'Centered ' + k]))), N('x', 'X (px) — custom', '0', { value: 0 }), N('y', 'Y (px) — custom', '0', { value: 0 }), N('w', 'Width (px) — custom', '500', { value: '' }), N('h', 'Height (px) — custom', '500', { value: '' }), FMTS], 'Crop Photo', async v => { const f = one(v, 'f'), i = await imgFrom(f), W = i.naturalWidth, Hh = i.naturalHeight; let x, y, w, h; if (v.p === 'free') { x = opt(v.x); y = opt(v.y); w = num(v.w); h = num(v.h); if (bad(w, h) || w <= 0 || h <= 0) return err('Enter crop width and height.'); } else { const r = PRE[v.p]; if (W / Hh > r) { h = Hh; w = Hh * r; } else { w = W; h = W / r; } x = (W - w) / 2; y = (Hh - h) / 2; } x = Math.max(0, Math.min(x, W - 1)); y = Math.max(0, Math.min(y, Hh - 1)); w = Math.min(w, W - x); h = Math.min(h, Hh - y); const c = cv(w, h), cx = c.getContext('2d'); if (v.t === 'image/jpeg') { cx.fillStyle = '#fff'; cx.fillRect(0, 0, c.width, c.height); } cx.drawImage(i, x, y, w, h, 0, 0, c.width, c.height); return show(c, v.t, .93, base(f) + '-cropped', [['Source', W + ' × ' + Hh], ['Crop origin', Math.round(x) + ', ' + Math.round(y)]]); });
-  const hx = (r, g, b) => '#' + [r, g, b].map(n => n.toString(16).padStart(2, '0')).join('');
-  push('image-color-picker', 'Image Color Picker & Palette Extractor', IM, 'fa-solid fa-eye-dropper', 'Pick the exact color at any position and extract the dominant palette.', [IMG, N('px', 'Pick X position (% from left)', '50', { value: 50, min: 0, max: 100 }), N('py', 'Pick Y position (% from top)', '50', { value: 50, min: 0, max: 100 })], 'Pick Colors', async v => { const f = one(v, 'f'), i = await imgFrom(f), s = Math.min(1, 160 / Math.max(i.naturalWidth, i.naturalHeight)), c = cv(i.naturalWidth * s, i.naturalHeight * s), x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(i, 0, 0, c.width, c.height); const X = Math.min(c.width - 1, Math.max(0, Math.round(num(v.px) / 100 * (c.width - 1)))), Y = Math.min(c.height - 1, Math.max(0, Math.round(num(v.py) / 100 * (c.height - 1)))), p = x.getImageData(X, Y, 1, 1).data, d = x.getImageData(0, 0, c.width, c.height).data, b = {}; for (let k = 0; k < d.length; k += 4) { if (d[k + 3] < 128) continue; const key = (d[k] >> 4) << 8 | (d[k + 1] >> 4) << 4 | d[k + 2] >> 4, e = b[key] || (b[key] = [0, 0, 0, 0]); e[0] += d[k]; e[1] += d[k + 1]; e[2] += d[k + 2]; e[3]++; } const top = Object.values(b).sort((a, z) => z[3] - a[3]).slice(0, 8).map(e => hx(Math.round(e[0] / e[3]), Math.round(e[1] / e[3]), Math.round(e[2] / e[3]))), sw = h => '<span title="' + h + '" style="display:inline-block;width:70px;margin:4px;text-align:center;font-size:.75em"><span style="display:block;height:46px;border-radius:8px;background:' + h + ';border:1px solid rgba(128,128,128,.4)"></span>' + h.toUpperCase() + '</span>'; return '<div class="qt-result"><b>Picked pixel</b><div>' + sw(hx(p[0], p[1], p[2])) + ' rgb(' + p[0] + ', ' + p[1] + ', ' + p[2] + ')</div><b>Dominant palette</b><div>' + top.map(sw).join('') + '</div></div>'; });
-  push('photo-filter-studio', 'Photo Filter Studio (Grayscale, Sepia, Invert, Brightness, Contrast)', IM, 'fa-solid fa-wand-magic-sparkles', 'Apply grayscale, sepia, invert, brightness, contrast, saturation and blur to a photo.', [IMG, RNG('g', 'Grayscale %', 0, 100, 0), RNG('s', 'Sepia %', 0, 100, 0), RNG('i', 'Invert %', 0, 100, 0), RNG('b', 'Brightness', -100, 100, 0), RNG('c', 'Contrast', -100, 100, 0), RNG('sa', 'Saturation', -100, 100, 0), RNG('bl', 'Blur (px)', 0, 20, 0), SEL('t', 'Output format', [['image/png', 'PNG'], ['image/jpeg', 'JPG'], ['image/webp', 'WebP']])], 'Apply Filters', async v => {
-    const f = one(v, 'f'), i = await imgFrom(f), c = cv(i.naturalWidth, i.naturalHeight), x = c.getContext('2d', { willReadFrequently: true }); if (+v.bl > 0 && 'filter' in x) x.filter = 'blur(' + v.bl + 'px)'; x.drawImage(i, 0, 0); x.filter = 'none';
-    const dt = x.getImageData(0, 0, c.width, c.height), p = dt.data, g = +v.g / 100, se = +v.s / 100, iv = +v.i / 100, br = +v.b * 2.55, cn = +v.c, cf = (259 * (cn + 255)) / (255 * (259 - cn)), sa = 1 + +v.sa / 100, cl = n => n < 0 ? 0 : n > 255 ? 255 : n;
-    for (let k = 0; k < p.length; k += 4) { let r = p[k], gg = p[k + 1], b = p[k + 2]; r += br; gg += br; b += br; r = cf * (r - 128) + 128; gg = cf * (gg - 128) + 128; b = cf * (b - 128) + 128; if (sa !== 1) { const l = .299 * r + .587 * gg + .114 * b; r = l + (r - l) * sa; gg = l + (gg - l) * sa; b = l + (b - l) * sa; } r = cl(r); gg = cl(gg); b = cl(b); if (se) { const tr = .393 * r + .769 * gg + .189 * b, tg = .349 * r + .686 * gg + .168 * b, tb = .272 * r + .534 * gg + .131 * b; r += (cl(tr) - r) * se; gg += (cl(tg) - gg) * se; b += (cl(tb) - b) * se; } if (g) { const l = .299 * r + .587 * gg + .114 * b; r += (l - r) * g; gg += (l - gg) * g; b += (l - b) * g; } if (iv) { r += (255 - 2 * r) * iv; gg += (255 - 2 * gg) * iv; b += (255 - 2 * b) * iv; } p[k] = r; p[k + 1] = gg; p[k + 2] = b; }
-    x.putImageData(dt, 0, 0); return show(+v.bl > 0 && !('filter' in x) ? c : c, v.t, .92, base(f) + '-filtered');
-  });
-  push('png-to-jpg', 'PNG to JPG Converter', IM, 'fa-solid fa-file-image', 'Convert PNG images to JPG with a background color for transparency.', [F('f', 'Choose PNG', 'image/png'), COL('bg', 'Background (replaces transparency)', '#ffffff'), RNG('q', 'JPG quality', 40, 100, 92)], 'Convert to JPG', async v => { const f = one(v, 'f'); return show(flatten(await draw(f), v.bg), 'image/jpeg', v.q / 100, base(f), null, f.size); });
-  push('jpg-to-png', 'JPG to PNG Converter', IM, 'fa-solid fa-file-image', 'Convert JPG images to lossless PNG.', [F('f', 'Choose JPG', 'image/jpeg'), ], 'Convert to PNG', async v => { const f = one(v, 'f'); return show(await draw(f), 'image/png', 1, base(f), null, f.size); });
-  push('webp-converter', 'WebP Converter (to and from WebP)', IM, 'fa-solid fa-image', 'Convert any image to WebP, or convert WebP back to JPG/PNG.', [IMG, SEL('t', 'Convert to', [['image/webp', 'WebP'], ['image/png', 'PNG'], ['image/jpeg', 'JPG']]), RNG('q', 'Quality (WebP/JPG)', 30, 100, 85)], 'Convert Image', async v => { const f = one(v, 'f'); let c = await draw(f); if (v.t === 'image/jpeg') c = flatten(c, '#ffffff'); return show(c, v.t, v.q / 100, base(f), null, f.size); });
-  push('image-to-base64', 'Image to Base64 Converter', IM, 'fa-solid fa-code', 'Convert an image to a Base64 data URI with ready-to-paste HTML and CSS.', [IMG], 'Convert to Base64', async v => { const f = one(v, 'f'), d = await readAs(f, 'readAsDataURL'); const ta = (s, r) => '<textarea readonly rows="' + r + '" style="width:100%;font-family:monospace;font-size:.8em" onclick="this.select()">' + esc(s) + '</textarea>'; return '<div class="qt-result">' + kv([['File', esc(f.name)], ['Original size', kb(f.size)], ['Base64 length', d.length.toLocaleString() + ' chars (~' + kb(d.length) + ')']]) + (d.length > 1.5e6 ? '<div style="color:#d97706">⚠ Large data URIs hurt page speed; consider a normal image file.</div>' : '') + '<b>Data URI</b>' + ta(d, 5) + '<b>HTML</b>' + ta('<img src="' + (d.length > 4000 ? d.slice(0, 60) + '…' : d) + '" alt="">', 2) + '<b>CSS</b>' + ta('background-image: url("' + (d.length > 4000 ? d.slice(0, 60) + '…' : d) + '");', 2) + '</div>'; });
-  push('base64-to-image', 'Base64 to Image Converter', IM, 'fa-solid fa-image', 'Decode a Base64 string or data URI back into a downloadable image.', [A('b', 'Base64 string or data URI', 'data:image/png;base64,iVBORw0KGgo…', { rows: 8 })], 'Convert to Image', v => { let s = String(v.b || '').trim().replace(/\s+/g, ''); if (!s) return err('Paste a Base64 string.'); let mime = 'image/png'; const m = /^data:([\w/+.-]+);base64,/i.exec(s); if (m) { mime = m[1]; s = s.slice(m[0].length); } else if (s.startsWith('/9j/')) mime = 'image/jpeg'; else if (s.startsWith('R0lGOD')) mime = 'image/gif'; else if (s.startsWith('UklGR')) mime = 'image/webp'; else if (s.startsWith('PHN2Zy') || s.startsWith('PD94')) mime = 'image/svg+xml'; let bin; try { bin = atob(s.replace(/-/g, '+').replace(/_/g, '/')); } catch (e) { return err('That is not valid Base64.'); } const a = Uint8Array.from(bin, c => c.charCodeAt(0)), b = new Blob([a], { type: mime }), u = URL.createObjectURL(b); return '<div class="qt-result"><img src="' + u + '" alt="Decoded image" style="max-width:100%;max-height:420px;border-radius:8px;border:1px solid rgba(128,128,128,.35)" onerror="this.outerHTML=\'<b style=color:#dc2626>Decoded data is not a displayable image.</b>\'">' + '<div style="margin:10px 0">' + link(b, 'decoded-image.' + (mime.split('/')[1] || 'png').replace('svg+xml', 'svg').replace('jpeg', 'jpg')) + '</div>' + kv([['Type', mime], ['Size', kb(a.length)]]) + '</div>'; });
-  push('image-watermark-stamper', 'Image Watermark Stamper', IM, 'fa-solid fa-copyright', 'Add a text watermark or copyright notice to photos.', [IMG, S('txt', 'Watermark text', '© QuickToolHub', { value: '© QuickToolHub' }), RNG('s', 'Text size (% of width)', 2, 20, 6), COL('c', 'Color', '#ffffff'), RNG('o', 'Opacity %', 5, 100, 60), SEL('p', 'Position', [['br', 'Bottom right'], ['bl', 'Bottom left'], ['tr', 'Top right'], ['tl', 'Top left'], ['c', 'Center'], ['tile', 'Tiled diagonal']]), FMTS], 'Stamp Watermark', async v => {
-    const f = one(v, 'f'), t = String(v.txt || '').trim(); if (!t) return err('Enter watermark text.'); const i = await imgFrom(f), c = cv(i.naturalWidth, i.naturalHeight), x = c.getContext('2d'); x.drawImage(i, 0, 0); const fs = Math.max(10, c.width * v.s / 100); x.font = '700 ' + fs + 'px Arial, Helvetica, sans-serif'; x.fillStyle = v.c; x.globalAlpha = v.o / 100; x.shadowColor = 'rgba(0,0,0,.55)'; x.shadowBlur = fs / 8; x.textBaseline = 'middle'; const w = x.measureText(t).width, m = fs * .6;
-    if (v.p === 'tile') { x.save(); x.translate(c.width / 2, c.height / 2); x.rotate(-Math.PI / 6); const sx = w + fs * 2, sy = fs * 3, R = Math.hypot(c.width, c.height); for (let yy = -R; yy < R; yy += sy) for (let xx = -R; xx < R; xx += sx) x.fillText(t, xx, yy); x.restore(); } else { const px = v.p.endsWith('l') ? m : v.p === 'c' ? (c.width - w) / 2 : c.width - w - m, py = v.p[0] === 't' ? m + fs / 2 : v.p === 'c' ? c.height / 2 : c.height - m - fs / 2; x.fillText(t, px, py); } x.globalAlpha = 1; return show(c, v.t, .93, base(f) + '-watermarked');
-  });
-  push('image-rotate-flip', 'Image Rotate & Flip', IM, 'fa-solid fa-rotate', 'Rotate by 90°/180°/270° or flip horizontally / vertically.', [IMG, SEL('r', 'Rotate', [['0', 'No rotation'], ['90', '90° clockwise'], ['180', '180°'], ['270', '90° counter-clockwise']]), SEL('fl', 'Flip', [['none', 'None'], ['h', 'Horizontal (mirror)'], ['v', 'Vertical']]), FMTS], 'Transform Image', async v => { const f = one(v, 'f'), i = await imgFrom(f), a = +v.r, sw = a === 90 || a === 270, c = cv(sw ? i.naturalHeight : i.naturalWidth, sw ? i.naturalWidth : i.naturalHeight), x = c.getContext('2d'); if (v.t === 'image/jpeg') { x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); } x.translate(c.width / 2, c.height / 2); x.rotate(a * Math.PI / 180); x.scale(v.fl === 'h' ? -1 : 1, v.fl === 'v' ? -1 : 1); x.drawImage(i, -i.naturalWidth / 2, -i.naturalHeight / 2); return show(c, v.t, .93, base(f) + '-transformed'); });
-  push('image-dimensions-checker', 'Image Dimensions & DPI Print Size Checker', IM, 'fa-solid fa-ruler-combined', 'See pixel size, aspect ratio, megapixels and print sizes at 72/150/300 DPI.', [IMG], 'Check Image', async v => { const f = one(v, 'f'), i = await imgFrom(f), w = i.naturalWidth, h = i.naturalHeight, g = (a, b) => b ? g(b, a % b) : a, d = g(w, h), pr = dpi => fmt(w / dpi, 1) + ' × ' + fmt(h / dpi, 1) + ' in (' + fmt(w / dpi * 2.54, 1) + ' × ' + fmt(h / dpi * 2.54, 1) + ' cm)'; return '<div class="qt-result"><img src="' + i.src + '" style="max-width:220px;border-radius:8px;margin-bottom:8px">' + kv([['Dimensions', '<b>' + w + ' × ' + h + ' px</b>'], ['Aspect ratio', w / d + ':' + h / d], ['Megapixels', fmt(w * h / 1e6, 2) + ' MP'], ['File type', esc(f.type || '—')], ['File size', kb(f.size)], ['Print @ 72 DPI (screen)', pr(72)], ['Print @ 150 DPI (good)', pr(150)], ['Print @ 300 DPI (photo)', pr(300)]]) + '</div>'; });
-  push('favicon-generator', 'Favicon Generator (PNG Sizes)', IM, 'fa-solid fa-star', 'Create 16, 32, 48, 180, 192 and 512 px favicon PNGs from any image.', [IMG, SEL('s', 'Crop', [['cover', 'Center-crop to square'], ['contain', 'Fit with transparent padding']])], 'Generate Favicons', async v => { const f = one(v, 'f'), i = await imgFrom(f); let h = ''; const w = i.naturalWidth, hh = i.naturalHeight, side = Math.min(w, hh); for (const s of [16, 32, 48, 180, 192, 512]) { const c = cv(s, s), x = c.getContext('2d'); x.imageSmoothingQuality = 'high'; if (v.s === 'cover') x.drawImage(i, (w - side) / 2, (hh - side) / 2, side, side, 0, 0, s, s); else { const k = Math.min(s / w, s / hh); x.drawImage(i, (s - w * k) / 2, (s - hh * k) / 2, w * k, hh * k); } const b = await toBlob(c, 'image/png'); h += '<div style="display:inline-block;margin:8px;text-align:center"><img src="' + URL.createObjectURL(b) + '" width="' + Math.min(s, 96) + '"><br>' + link(b, (s === 180 ? 'apple-touch-icon' : 'favicon-' + s + 'x' + s) + '.png', s + '×' + s) + '</div>'; } return '<div class="qt-result">' + h + '<textarea readonly rows="5" style="width:100%;font-family:monospace;font-size:.85em" onclick="this.select()">' + esc('<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">\n<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">\n<link rel="apple-touch-icon" href="/apple-touch-icon.png">') + '</textarea></div>'; });
-
-  /* ----- EXIF reader / stripper ----- */
-  const TYPES = [0, 1, 1, 2, 4, 8, 1, 1, 2, 4, 8, 4, 8];
-  const parseExif = dv => { let off = 2; while (off + 4 < dv.byteLength) { const mk = dv.getUint16(off), len = dv.getUint16(off + 2); if (mk === 0xFFE1 && dv.getUint32(off + 4) === 0x45786966) return tiff(dv, off + 10); if ((mk & 0xFF00) !== 0xFF00) break; off += 2 + len; } return null; };
-  const tiff = (dv, b) => { const le = dv.getUint16(b) === 0x4949, g16 = o => dv.getUint16(b + o, le), g32 = o => dv.getUint32(b + o, le), gs32 = o => dv.getInt32(b + o, le); const val = (t, n, o) => { if (t === 2) { let s = ''; for (let i = 0; i < n - 1; i++) s += String.fromCharCode(dv.getUint8(b + o + i)); return s.trim(); } const r = []; for (let i = 0; i < Math.min(n, 64); i++) { const p = o + i * TYPES[t]; r.push(t === 3 ? g16(p) : t === 4 ? g32(p) : t === 5 ? [g32(p), g32(p + 4)] : t === 10 ? [gs32(p), gs32(p + 4)] : dv.getUint8(b + p)); } return n === 1 ? r[0] : r; }; const ifd = o => { const r = {}; if (!o || o + 2 > dv.byteLength - b) return r; const n = g16(o); for (let i = 0; i < n; i++) { const e = o + 2 + i * 12; if (b + e + 12 > dv.byteLength) break; const tag = g16(e), t = g16(e + 2), c = g32(e + 4); if (!TYPES[t]) continue; const sz = TYPES[t] * c; try { r[tag] = val(t, c, sz > 4 ? g32(e + 8) : e + 8); } catch (x) { } } return r; }; const i0 = ifd(g32(4)); return { i0, ex: i0[0x8769] ? ifd(i0[0x8769]) : {}, gps: i0[0x8825] ? ifd(i0[0x8825]) : {} }; };
-  const rat = x => Array.isArray(x) && Array.isArray(x[0]) ? x[0][0] / x[0][1] : Array.isArray(x) ? (x[1] ? x[0] / x[1] : 0) : x;
-  const dms = (a, ref) => { if (!Array.isArray(a) || a.length < 3) return null; const d = a[0][0] / a[0][1] + a[1][0] / a[1][1] / 60 + a[2][0] / a[2][1] / 3600; return (ref === 'S' || ref === 'W' ? -1 : 1) * d; };
-  const ORI = { 1: 'Normal', 3: 'Rotated 180°', 6: 'Rotated 90° CW', 8: 'Rotated 90° CCW', 2: 'Mirrored', 4: 'Mirrored vertical', 5: 'Transposed', 7: 'Transversed' };
-  push('exif-reader', 'EXIF Metadata Reader (Photo Info & GPS)', IM, 'fa-solid fa-camera', 'Read camera, lens, exposure, date and GPS location data from JPEG photos.', [F('f', 'Choose JPG photo', 'image/jpeg,image/jpg')], 'Read EXIF', async v => {
-    const f = one(v, 'f'), buf = await readAs(f.slice(0, 400000), 'readAsArrayBuffer'), dv = new DataView(buf); if (dv.getUint16(0) !== 0xFFD8) return err('EXIF is stored in JPEG photos. Please choose a .jpg file.');
-    const e = parseExif(dv); if (!e || !Object.keys(e.i0).length) return '<div class="qt-result"><b>No EXIF metadata found.</b> This photo has been stripped or never had metadata.</div>';
-    const { i0, ex, gps } = e, R = []; const add = (k, x) => { if (x !== undefined && x !== null && x !== '' && x !== false) R.push([k, esc(x)]); };
-    add('Camera make', i0[0x010F]); add('Camera model', i0[0x0110]); add('Lens', ex[0xA434]); add('Software', i0[0x0131]); add('Date taken', ex[0x9003] || i0[0x0132]); add('Artist', i0[0x013B]); add('Copyright', i0[0x8298]); add('Orientation', ORI[i0[0x0112]] || i0[0x0112]);
-    if (ex[0x829A] !== undefined) { const t = rat(ex[0x829A]); add('Exposure time', t && t < 1 ? '1/' + Math.round(1 / t) + ' s' : t + ' s'); } if (ex[0x829D] !== undefined) add('Aperture', 'f/' + fmt(rat(ex[0x829D]), 1)); add('ISO', Array.isArray(ex[0x8827]) ? ex[0x8827][0] : ex[0x8827]); if (ex[0x920A] !== undefined) add('Focal length', fmt(rat(ex[0x920A]), 1) + ' mm'); add('Focal length (35mm eq.)', ex[0xA405] ? ex[0xA405] + ' mm' : ''); if (ex[0x9204] !== undefined) add('Exposure bias', fmt(rat(ex[0x9204]), 2) + ' EV'); if (ex[0x9209] !== undefined) add('Flash', ex[0x9209] & 1 ? 'Fired' : 'Did not fire'); if (ex[0xA002]) add('Pixel size', ex[0xA002] + ' × ' + ex[0xA003]);
-    const la = dms(gps[2], gps[1]), lo = dms(gps[4], gps[3]); let map = ''; if (la !== null && lo !== null) { R.push(['GPS location', fmt(la, 6) + ', ' + fmt(lo, 6)]); map = '<a href="https://www.google.com/maps?q=' + la + ',' + lo + '" target="_blank" rel="noopener noreferrer">Open in Google Maps ↗</a><div style="color:#d97706;margin-top:6px">⚠ This photo contains your location. Strip EXIF before sharing publicly.</div>'; } if (gps[6] !== undefined) R.push(['Altitude', fmt(rat(gps[6]), 1) + ' m']);
-    return '<div class="qt-result">' + kv(R) + map + '</div>';
-  });
-  push('exif-stripper', 'EXIF Stripper (Remove Photo Metadata)', IM, 'fa-solid fa-user-shield', 'Remove GPS location and camera metadata from photos before sharing.', [IMG, SEL('t', 'Output format', [['image/jpeg', 'JPG'], ['image/png', 'PNG'], ['image/webp', 'WebP']]), RNG('q', 'Quality (JPG/WebP)', 60, 100, 95)], 'Strip Metadata', async v => { const f = one(v, 'f'); let c = await draw(f); if (v.t === 'image/jpeg') c = flatten(c, '#ffffff'); return show(c, v.t, v.q / 100, base(f) + '-clean', [['Metadata', '✅ All EXIF/GPS removed (image was re-drawn from pixels)']], f.size); });
-
-  return out;
-})(),
-
-/* ---------- 8. VIDEO & AUDIO WEB UTILITIES ---------- */
-...(function () {
-  'use strict';
-  const { esc, num, opt, bad, fmt, err, kv, table, load, link, kb, files, gcd, toBlob, el, N, S, A, SEL, F, RNG, COL, T } = globalThis.QTH;
-  const VA = 'Video & Audio Tools';
-  const out = []; const push = (...a) => out.push(T(...a));
-  const one = (v, k) => { const f = files(v[k])[0]; if (!f) throw new Error('Please choose a file first.'); return f; };
-  const vid = f => new Promise((res, rej) => { const v = document.createElement('video'); v.preload = 'auto'; v.muted = true; v.playsInline = true; v.onloadeddata = () => res(v); v.onerror = () => rej(new Error('Your browser cannot read this video format. Try MP4 (H.264) or WebM.')); v.src = URL.createObjectURL(f); });
-  const seek = (v, t) => new Promise(res => { v.onseeked = () => res(); v.currentTime = Math.min(Math.max(t, 0), Math.max(v.duration - 0.05, 0)); });
-  const AC = () => new (window.AudioContext || window.webkitAudioContext)();
-  const hms = s => { s = Math.round(s); const f = n => String(n).padStart(2, '0'); return f(s / 3600 | 0) + ':' + f(s % 3600 / 60 | 0) + ':' + f(s % 60); };
-  const base = f => f.name.replace(/\.[^.]+$/, '');
-  const stopWhenGone = (node, fn) => { const t = setInterval(() => { if (!node.isConnected) { clearInterval(t); fn(); } }, 1000); };
-  const btn = (txt, on, css) => el('button', { type: 'button', style: 'padding:9px 16px;margin:4px 6px 4px 0;border:0;border-radius:8px;background:#2563eb;color:#fff;font-weight:600;cursor:pointer;' + (css || ''), onclick: on }, txt);
-
-  push('video-duration-aspect-ratio-calculator', 'Video Duration & Aspect Ratio Calculator', VA, 'fa-solid fa-film', 'Read a video\'s length, resolution and aspect ratio — or calculate a new size for any ratio.', [F('f', 'Choose video file', 'video/*'), SEL('r', 'Resize to ratio (optional)', ['Keep original', '16:9', '9:16', '4:3', '1:1', '21:9', '4:5']), N('w', 'New width (px) for resize', '1280', { value: '' })], 'Analyze Video', async v => {
-    const f = one(v, 'f'), x = await vid(f), w = x.videoWidth, h = x.videoHeight, d = gcd(w, h), dur = x.duration; const rows = [['Duration', '<b>' + hms(dur) + '</b> (' + fmt(dur, 2) + ' s)'], ['Resolution', w + ' × ' + h + ' px'], ['Aspect ratio', w / d + ':' + h / d + ' (' + fmt(w / h, 3) + ')'], ['File size', kb(f.size)], ['Avg bitrate', isFinite(dur) && dur > 0 ? fmt(f.size * 8 / dur / 1e6, 2) + ' Mbps' : '—'], ['Format', esc(f.type || 'unknown')]];
-    if (v.r !== 'Keep original' && isFinite(num(v.w))) { const [a, b] = v.r.split(':').map(Number), nw = num(v.w); rows.push(['Resized for ' + v.r, Math.round(nw) + ' × ' + Math.round(nw * b / a) + ' px']); } return kv(rows);
-  });
-  push('video-thumbnail-frame-extractor', 'Video Thumbnail & Frame Extractor', VA, 'fa-solid fa-image', 'Grab a still frame at any time, or extract evenly spaced frames as PNG/JPG.', [F('f', 'Choose video file', 'video/*'), N('t', 'Time (seconds) — single frame', '5', { value: 1 }), N('n', 'Or extract N evenly spaced frames (1–24)', '1', { value: 1 }), SEL('fm', 'Format', [['image/jpeg', 'JPG'], ['image/png', 'PNG']])], 'Extract Frames', async v => {
-    const f = one(v, 'f'), x = await vid(f), n = Math.max(1, Math.min(24, Math.round(num(v.n)) || 1)), c = document.createElement('canvas'); c.width = x.videoWidth; c.height = x.videoHeight; const g = c.getContext('2d'); let h = ''; const times = n === 1 ? [opt(v.t)] : Array.from({ length: n }, (_, i) => x.duration * (i + .5) / n);
-    for (const t of times) { await seek(x, t); g.drawImage(x, 0, 0); const b = await toBlob(c, v.fm, .92); h += '<div style="display:inline-block;margin:6px;text-align:center"><img src="' + URL.createObjectURL(b) + '" style="max-width:' + (n === 1 ? '100%' : '200px') + ';border-radius:6px"><br>' + link(b, base(f) + '-' + hms(t).replace(/:/g, '-') + (v.fm === 'image/png' ? '.png' : '.jpg'), hms(t)) + '</div>'; } return '<div class="qt-result">' + h + '</div>';
-  });
-  const lzw = (mc, idx) => { const clear = 1 << mc, eoi = clear + 1; let next = eoi + 1, size = mc + 1, cur = 0, sh = 0, tbl = new Map(); const bytes = [], emit = c => { cur |= c << sh; sh += size; while (sh >= 8) { bytes.push(cur & 255); cur >>= 8; sh -= 8; } }; emit(clear); let ib = idx[0]; for (let i = 1; i < idx.length; i++) { const k = idx[i], key = ib << 8 | k, c = tbl.get(key); if (c === undefined) { emit(ib); if (next === 4096) { emit(clear); next = eoi + 1; size = mc + 1; tbl = new Map(); } else { if (next >= (1 << size)) size++; tbl.set(key, next++); } ib = k; } else ib = c; } emit(ib); emit(eoi); if (sh > 0) bytes.push(cur & 255); return bytes; };
-  const gifEnc = (frames, w, h, delay) => { const o = [], w16 = n => o.push(n & 255, n >> 8 & 255); [71, 73, 70, 56, 57, 97].forEach(b => o.push(b)); w16(w); w16(h); o.push(0xF7, 0, 0); for (let i = 0; i < 256; i++) i < 216 ? o.push(Math.floor(i / 36) * 51, Math.floor(i / 6) % 6 * 51, i % 6 * 51) : o.push(0, 0, 0); o.push(0x21, 0xFF, 0x0B); 'NETSCAPE2.0'.split('').forEach(c => o.push(c.charCodeAt(0))); o.push(3, 1, 0, 0, 0); frames.forEach(d => { o.push(0x21, 0xF9, 4, 0); w16(delay); o.push(0, 0, 0x2C); w16(0); w16(0); w16(w); w16(h); o.push(0); const idx = new Uint8Array(w * h); for (let i = 0, p = 0; i < idx.length; i++, p += 4) idx[i] = 36 * Math.round(d[p] / 51) + 6 * Math.round(d[p + 1] / 51) + Math.round(d[p + 2] / 51); o.push(8); const lz = lzw(8, idx); for (let i = 0; i < lz.length; i += 255) { const n = Math.min(255, lz.length - i); o.push(n); for (let j = 0; j < n; j++) o.push(lz[i + j]); } o.push(0); }); o.push(0x3B); return new Uint8Array(o); };
-  push('video-to-gif-helper', 'Video to GIF Converter', VA, 'fa-solid fa-file-video', 'Turn a short video clip into an animated GIF right in your browser.', [F('f', 'Choose video clip', 'video/*'), N('s', 'Start time (seconds)', '0', { value: 0 }), N('d', 'Duration (1–10 s)', '3', { value: 3 }), N('fps', 'Frames per second (1–15)', '10', { value: 10 }), N('w', 'GIF width (px, 120–480)', '320', { value: 320 })], 'Create GIF', async v => {
-    const f = one(v, 'f'), x = await vid(f), s = opt(v.s), d = Math.min(10, Math.max(1, num(v.d) || 3)), fps = Math.min(15, Math.max(1, Math.round(num(v.fps)) || 10)), w = Math.min(480, Math.max(120, Math.round(num(v.w)) || 320)), h = Math.round(w * x.videoHeight / x.videoWidth); if (s >= x.duration) return err('Start time is beyond the video length (' + fmt(x.duration, 1) + ' s).');
-    const c = document.createElement('canvas'); c.width = w; c.height = h; const g = c.getContext('2d', { willReadFrequently: true }), n = Math.min(Math.floor(d * fps), Math.floor((x.duration - s) * fps)) || 1, fr = []; for (let i = 0; i < n; i++) { await seek(x, s + i / fps); g.drawImage(x, 0, 0, w, h); fr.push(g.getImageData(0, 0, w, h).data); }
-    const b = new Blob([gifEnc(fr, w, h, Math.round(100 / fps))], { type: 'image/gif' }); return '<div class="qt-result"><img src="' + URL.createObjectURL(b) + '" style="max-width:100%;border-radius:8px"><div style="margin:8px 0">' + link(b, base(f) + '.gif') + '</div>' + kv([['Frames', n], ['Size', w + ' × ' + h], ['GIF size', kb(b.size)]]) + '<div style="opacity:.7;font-size:.85em">Uses a fixed 216-color palette for speed; colors may look slightly banded.</div></div>';
-  });
-  push('metronome', 'Online Metronome', VA, 'fa-solid fa-drum', 'Adjustable BPM metronome with accented downbeat and visual pulse.', [N('bpm', 'Tempo (BPM)', '120', { value: 120, min: 20, max: 300 }), N('bpb', 'Beats per bar', '4', { value: 4, min: 1, max: 12 }), SEL('snd', 'Sound', ['Click', 'Woodblock', 'Beep'])], 'Start Metronome', v => {
-    const bpm = num(v.bpm), bpb = Math.round(num(v.bpb)); if (bad(bpm, bpb) || bpm < 20 || bpm > 300 || bpb < 1) return err('Tempo must be 20–300 BPM.'); let ctx, t = null, nt = 0, bt = 0; const dot = el('div', { style: 'width:46px;height:46px;border-radius:50%;background:#94a3b8;margin:0 auto 8px;transition:background .08s' }), lab = el('div', { style: 'text-align:center;font-weight:700;font-size:1.3em' }, bpm + ' BPM · ' + bpb + '/4'), wrap = el('div', { class: 'qt-result' }, dot, lab);
-    const click = (when, acc) => { const o = ctx.createOscillator(), g = ctx.createGain(); o.type = v.snd === 'Beep' ? 'sine' : v.snd === 'Woodblock' ? 'triangle' : 'square'; o.frequency.value = (v.snd === 'Woodblock' ? 800 : v.snd === 'Beep' ? 660 : 1000) * (acc ? 1.5 : 1); g.gain.setValueAtTime(.4, when); g.gain.exponentialRampToValueAtTime(.001, when + .06); o.connect(g).connect(ctx.destination); o.start(when); o.stop(when + .07); setTimeout(() => { dot.style.background = acc ? '#dc2626' : '#2563eb'; setTimeout(() => dot.style.background = '#94a3b8', 90); }, Math.max(0, (when - ctx.currentTime) * 1000)); };
-    const stop = () => { clearInterval(t); t = null; if (ctx) { ctx.close(); ctx = null; } b.textContent = '▶ Start'; }, b = btn('▶ Start', () => { if (t) return stop(); ctx = AC(); nt = ctx.currentTime + .05; bt = 0; t = setInterval(() => { if (!wrap.isConnected) return stop(); while (nt < ctx.currentTime + .12) { click(nt, bt % bpb === 0); nt += 60 / bpm; bt++; } }, 25); b.textContent = '■ Stop'; }); wrap.append(el('div', { style: 'text-align:center' }, b)); return wrap;
-  });
-  const NOTES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
-  push('audio-tone-frequency-generator', 'Audio Tone / Frequency Generator', VA, 'fa-solid fa-wave-square', 'Generate sine, square, saw or triangle tones from 20 Hz to 20 kHz.', [N('f', 'Frequency (Hz)', '440', { value: 440, min: 20, max: 20000 }), SEL('w', 'Waveform', ['sine', 'square', 'sawtooth', 'triangle']), RNG('vol', 'Volume %', 1, 50, 15)], 'Create Tone', v => {
-    const f = num(v.f); if (bad(f) || f < 20 || f > 20000) return err('Frequency must be between 20 and 20,000 Hz.'); const n = Math.round(69 + 12 * Math.log2(f / 440)), cents = Math.round(1200 * Math.log2(f / (440 * Math.pow(2, (n - 69) / 12)))); let ctx, o; const stop = () => { if (o) { try { o.stop(); } catch (e) { } o = null; } if (ctx) { ctx.close(); ctx = null; } b.textContent = '▶ Play'; }, b = btn('▶ Play', () => { if (o) return stop(); ctx = AC(); o = ctx.createOscillator(); const g = ctx.createGain(); o.type = v.w; o.frequency.value = f; g.gain.value = v.vol / 100; o.connect(g).connect(ctx.destination); o.start(); b.textContent = '■ Stop'; }), w = el('div', { class: 'qt-result' }, el('div', { style: 'font-size:1.3em;font-weight:700' }, f + ' Hz ≈ ' + NOTES[((n % 12) + 12) % 12] + (Math.floor(n / 12) - 1) + ' (' + (cents >= 0 ? '+' : '') + cents + ' cents)'), b, el('div', { style: 'opacity:.7;font-size:.85em' }, 'Keep volume low when testing speakers or headphones.')); stopWhenGone(w, stop); return w;
-  });
-  push('voice-recorder', 'Mic / Voice Recorder', VA, 'fa-solid fa-microphone', 'Record audio from your microphone and download it (nothing leaves your device).', [SEL('x', 'Echo cancellation & noise suppression', ['On', 'Off'])], 'Open Recorder', v => {
-    if (!navigator.mediaDevices || !window.MediaRecorder) return err('Recording is not supported in this browser.'); let rec, st, chunks = [], t0, tm; const w = el('div', { class: 'qt-result' }), lab = el('div', { style: 'font-size:1.4em;font-weight:700;font-variant-numeric:tabular-nums' }, '00:00'), res = el('div'); const stop = () => { clearInterval(tm); if (rec && rec.state !== 'inactive') rec.stop(); if (st) st.getTracks().forEach(x => x.stop()); b.textContent = '● Record'; }; const b = btn('● Record', async () => { if (rec && rec.state === 'recording') return stop(); try { st = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: v.x === 'On', noiseSuppression: v.x === 'On' } }); } catch (e) { res.innerHTML = err('Microphone access was denied or unavailable.'); return; } chunks = []; rec = new MediaRecorder(st); rec.ondataavailable = e => chunks.push(e.data); rec.onstop = () => { const bl = new Blob(chunks, { type: rec.mimeType }); res.innerHTML = '<audio controls src="' + URL.createObjectURL(bl) + '" style="width:100%"></audio>' + link(bl, 'recording.' + (/ogg/.test(rec.mimeType) ? 'ogg' : /mp4/.test(rec.mimeType) ? 'm4a' : 'webm')) + ' <span style="opacity:.7">' + kb(bl.size) + '</span>'; }; rec.start(); t0 = Date.now(); tm = setInterval(() => { lab.textContent = hms((Date.now() - t0) / 1000).slice(3); if (!w.isConnected) stop(); }, 250); b.textContent = '■ Stop'; res.innerHTML = ''; }); w.append(lab, b, res); return w;
-  });
-  push('text-to-speech', 'Text to Speech (Web Speech API)', VA, 'fa-solid fa-volume-high', 'Read text aloud with your device\'s built-in voices.', [A('t', 'Text to speak', 'Hello! Welcome to QuickToolHub.', { rows: 5 }), S('vn', 'Voice name or language contains (optional)', 'e.g. en-IN, Hindi, Google UK', { value: '' }), RNG('r', 'Speed', 5, 20, 10), RNG('p', 'Pitch', 0, 20, 10)], 'Speak', v => {
-    const s = window.speechSynthesis; if (!s) return err('Text-to-speech is not supported in this browser.'); const t = String(v.t || '').trim(); if (!t) return err('Enter some text.'); s.cancel(); const u = new SpeechSynthesisUtterance(t); u.rate = v.r / 10; u.pitch = v.p / 10; const q = String(v.vn || '').toLowerCase().trim(), vs = s.getVoices(); let pick = null; if (q) { pick = vs.find(x => (x.name + ' ' + x.lang).toLowerCase().includes(q)); if (pick) { u.voice = pick; u.lang = pick.lang; } } s.speak(u); const w = el('div', { class: 'qt-result' }, el('div', {}, '🔊 Speaking' + (pick ? ' with ' + pick.name + ' (' + pick.lang + ')' : (q ? ' — no voice matched "' + q + '", using default' : '') ) + '… ' + vs.length + ' voices available.'), btn('■ Stop', () => s.cancel()), btn('↻ Speak again', () => { s.cancel(); s.speak(u); })); stopWhenGone(w, () => s.cancel()); return w;
-  });
-  push('speech-to-text-notetaker', 'Speech to Text Notetaker', VA, 'fa-solid fa-microphone-lines', 'Dictate notes with live transcription (uses your browser\'s speech recognition).', [SEL('l', 'Language', [['en-US', 'English (US)'], ['en-GB', 'English (UK)'], ['en-IN', 'English (India)'], ['hi-IN', 'Hindi'], ['es-ES', 'Spanish'], ['fr-FR', 'French'], ['de-DE', 'German'], ['it-IT', 'Italian'], ['pt-BR', 'Portuguese (Brazil)'], ['ja-JP', 'Japanese'], ['ko-KR', 'Korean'], ['ar-SA', 'Arabic']])], 'Open Notetaker', v => {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition; if (!SR) return err('Speech recognition is not supported in this browser. Try Chrome, Edge or Safari.'); let r = null, on = false; const ta = el('textarea', { rows: 10, style: 'width:100%', placeholder: 'Your transcript appears here…' }), st = el('div', { style: 'opacity:.7;margin:6px 0' }, 'Press Start and allow microphone access.'); const stop = () => { on = false; if (r) r.stop(); b.textContent = '● Start dictating'; }; const b = btn('● Start dictating', () => { if (on) return stop(); r = new SR(); r.lang = v.l; r.continuous = true; r.interimResults = true; let base = ta.value; r.onresult = e => { let fin = '', int = ''; for (let i = e.resultIndex; i < e.results.length; i++) (e.results[i].isFinal ? (fin += e.results[i][0].transcript) : (int += e.results[i][0].transcript)); if (fin) base += (base && !/\s$/.test(base) ? ' ' : '') + fin.trim(); ta.value = base + (int ? (base ? ' ' : '') + int : ''); }; r.onerror = e => { st.textContent = 'Error: ' + e.error; stop(); }; r.onend = () => { if (on && el) { try { r.start(); } catch (x) { } } }; on = true; r.start(); st.textContent = '🎙 Listening…'; b.textContent = '■ Stop'; }); const w = el('div', { class: 'qt-result' }, b, btn('Copy', () => navigator.clipboard && navigator.clipboard.writeText(ta.value), 'background:#475569'), btn('Clear', () => { ta.value = ''; }, 'background:#475569'), st, ta); stopWhenGone(w, stop); return w;
-  });
-  push('audio-decibel-visualizer', 'Audio Decibel Meter & Visualizer', VA, 'fa-solid fa-chart-simple', 'Live microphone level meter with a frequency spectrum visualizer.', [SEL('m', 'Mode', ['Spectrum bars', 'Waveform'])], 'Start Meter', v => {
-    if (!navigator.mediaDevices) return err('Microphone is not available in this browser.'); const c = el('canvas', { width: 600, height: 220, style: 'width:100%;border-radius:8px;background:#0f172a' }), g = c.getContext('2d'), db = el('div', { style: 'font-size:1.6em;font-weight:700;text-align:center;margin:6px 0' }, '— dB'); let ctx, st, raf; const stop = () => { cancelAnimationFrame(raf); if (st) st.getTracks().forEach(x => x.stop()); if (ctx) ctx.close(); ctx = st = null; b.textContent = '▶ Start'; }; const b = btn('▶ Start', async () => { if (ctx) return stop(); try { st = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false } }); } catch (e) { db.textContent = 'Microphone access denied'; return; } ctx = AC(); const an = ctx.createAnalyser(); an.fftSize = 1024; ctx.createMediaStreamSource(st).connect(an); const fd = new Uint8Array(an.frequencyBinCount), td = new Float32Array(an.fftSize); const loop = () => { if (!ctx) return; if (!c.isConnected) return stop(); an.getFloatTimeDomainData(td); let s = 0; for (const x of td) s += x * x; const rms = Math.sqrt(s / td.length), d = 20 * Math.log10(Math.max(rms, 1e-6)); db.innerHTML = fmt(d, 1) + ' dBFS <span style="font-size:.5em;opacity:.7">(≈ ' + fmt(d + 90, 0) + ' dB SPL, uncalibrated)</span>'; g.clearRect(0, 0, c.width, c.height); if (v.m === 'Waveform') { an.getByteTimeDomainData(fd.length >= td.length ? fd : new Uint8Array(td.length)); const wd = new Uint8Array(an.fftSize); an.getByteTimeDomainData(wd); g.strokeStyle = '#38bdf8'; g.lineWidth = 2; g.beginPath(); wd.forEach((y, i) => { const px = i / wd.length * c.width, py = y / 255 * c.height; i ? g.lineTo(px, py) : g.moveTo(px, py); }); g.stroke(); } else { an.getByteFrequencyData(fd); const bw = c.width / 64; for (let i = 0; i < 64; i++) { const h = fd[i * 2] / 255 * c.height; g.fillStyle = 'hsl(' + (200 - i * 2) + ',80%,55%)'; g.fillRect(i * bw + 1, c.height - h, bw - 2, h); } } raf = requestAnimationFrame(loop); }; loop(); b.textContent = '■ Stop'; }); return el('div', { class: 'qt-result' }, db, c, b, el('div', { style: 'opacity:.7;font-size:.85em' }, 'Browser microphones are not calibrated; use for relative comparison only.'));
-  });
-  return out;
-})(),
-
-/* ---------- 9. QR CODE & BARCODE TOOLS ---------- */
-...(function () {
-  'use strict';
-  const { esc, num, bad, err, kv, load, link, kb, files, toBlob, readAs, imgFrom, N, S, A, SEL, F, COL, T } = globalThis.QTH;
-  const QB = 'QR & Barcode Tools', CDN = 'https://cdnjs.cloudflare.com/ajax/libs/';
-  const out = []; const push = (...a) => out.push(T(...a));
-  const qr = async (text, v) => { await load(CDN + 'qrious/4.0.2/qrious.min.js'); const c = document.createElement('canvas'); new QRious({ element: c, value: text, size: Math.min(1200, Math.max(120, Math.round(num(v.s)) || 300)), level: v.l || 'M', foreground: v.fg || '#000000', background: v.bg || '#ffffff', padding: 16 }); const b = await toBlob(c, 'image/png'); return '<div class="qt-result"><img src="' + URL.createObjectURL(b) + '" alt="QR code" style="max-width:100%;border-radius:8px;border:1px solid rgba(128,128,128,.3)"><div style="margin:8px 0">' + link(b, 'qrcode.png') + '</div><div style="opacity:.75;font-size:.85em">Test-scan before printing. Keep strong contrast (dark on light).</div></div>'; };
-  const QOPT = [N('s', 'Size (px)', '300', { value: 300 }), SEL('l', 'Error correction', [['M', 'Medium (15%)'], ['L', 'Low (7%)'], ['Q', 'Quartile (25%)'], ['H', 'High (30%)']]), COL('fg', 'Foreground', '#000000'), COL('bg', 'Background', '#ffffff')];
-  push('qr-code-generator', 'QR Code Generator', QB, 'fa-solid fa-qrcode', 'Create QR codes for URLs, text, phone numbers or emails and download as PNG.', [A('t', 'Text or URL', 'https://example.com', { rows: 3 })].concat(QOPT), 'Generate QR Code', v => { const t = String(v.t || '').trim(); if (!t) return err('Enter text or a URL.'); if (t.length > 2000) return err('Text is too long for a QR code (max ~2000 characters).'); return qr(t, v); });
-  push('wifi-qr-code-generator', 'WiFi QR Code Generator', QB, 'fa-solid fa-wifi', 'Let guests join your WiFi by scanning a QR code.', [S('ssid', 'Network name (SSID)', 'MyWiFi'), S('pw', 'Password', ''), SEL('enc', 'Security', [['WPA', 'WPA/WPA2/WPA3'], ['WEP', 'WEP'], ['nopass', 'None']]), SEL('h', 'Hidden network', ['No', 'Yes'])].concat(QOPT), 'Generate WiFi QR', v => { const s = String(v.ssid || '').trim(); if (!s) return err('Enter the network name.'); const e = x => String(x).replace(/([\\;,:"])/g, '\\$1'); return qr('WIFI:T:' + v.enc + ';S:' + e(s) + ';P:' + e(v.pw || '') + ';H:' + (v.h === 'Yes' ? 'true' : 'false') + ';;', v); });
-  push('vcard-qr-code-generator', 'vCard QR Code (Contact Card)', QB, 'fa-solid fa-address-card', 'Create a QR code that saves your contact details when scanned.', [S('n', 'Full name', 'Asha Verma'), S('o', 'Organization', ''), S('ph', 'Phone', '+91 98765 43210'), S('em', 'Email', 'asha@example.com'), S('u', 'Website', 'https://example.com')].concat(QOPT), 'Generate vCard QR', v => { const n = String(v.n || '').trim(); if (!n) return err('Enter a name.'); const p = n.split(' '); const L = ['BEGIN:VCARD', 'VERSION:3.0', 'N:' + p.slice(1).join(' ') + ';' + p[0] + ';;;', 'FN:' + n]; if (v.o) L.push('ORG:' + v.o); if (v.ph) L.push('TEL:' + v.ph); if (v.em) L.push('EMAIL:' + v.em); if (v.u) L.push('URL:' + v.u); L.push('END:VCARD'); return qr(L.join('\n'), v); });
-  push('qr-code-reader', 'QR Code Reader (Scan from Image)', QB, 'fa-solid fa-camera-retro', 'Decode a QR code from an uploaded photo or screenshot.', [F('f', 'Choose image containing a QR code', 'image/*')], 'Read QR Code', async v => { const f = files(v.f)[0]; if (!f) return err('Choose an image first.'); await load(CDN + 'jsQR/1.4.0/jsQR.min.js'); const i = await imgFrom(f), s = Math.min(1, 1400 / Math.max(i.naturalWidth, i.naturalHeight)), c = document.createElement('canvas'); c.width = Math.round(i.naturalWidth * s); c.height = Math.round(i.naturalHeight * s); const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(i, 0, 0, c.width, c.height); const r = jsQR(x.getImageData(0, 0, c.width, c.height).data, c.width, c.height, { inversionAttempts: 'attemptBoth' }); if (!r) return err('No QR code found. Try a sharper, closer image.'); const d = r.data, u = /^https?:\/\//i.test(d); return '<div class="qt-result"><b>Decoded content</b><textarea readonly rows="4" style="width:100%" onclick="this.select()">' + esc(d) + '</textarea>' + (u ? '<div style="margin-top:6px"><a href="' + esc(d) + '" target="_blank" rel="noopener noreferrer nofollow">Open link ↗</a> <span style="opacity:.7">(check the address before opening)</span></div>' : '') + '</div>'; });
-  const BF = [['EAN13', 'EAN-13 (12–13 digits)'], ['CODE128', 'Code 128 (any text)'], ['CODE39', 'Code 39'], ['UPC', 'UPC-A (11–12 digits)'], ['EAN8', 'EAN-8 (7–8 digits)'], ['ITF14', 'ITF-14 (13–14 digits)']];
-  push('barcode-generator', 'Barcode Generator (EAN-13, Code 128, UPC)', QB, 'fa-solid fa-barcode', 'Generate EAN-13, EAN-8, UPC-A, Code 128, Code 39 and ITF-14 barcodes as PNG.', [S('t', 'Value', '590123412345'), SEL('f', 'Format', BF), N('w', 'Bar width (1–4)', '2', { value: 2 }), N('h', 'Height (px)', '100', { value: 100 }), SEL('d', 'Show text under bars', ['Yes', 'No']), COL('c', 'Bar color', '#000000')], 'Generate Barcode', async v => { const t = String(v.t || '').trim(); if (!t) return err('Enter a value.'); await load(CDN + 'jsbarcode/3.11.5/JsBarcode.all.min.js'); const c = document.createElement('canvas'); let bad2 = false; try { JsBarcode(c, t, { format: v.f, width: Math.min(4, Math.max(1, num(v.w) || 2)), height: Math.min(300, Math.max(30, num(v.h) || 100)), displayValue: v.d === 'Yes', lineColor: v.c, margin: 16, background: '#ffffff', valid: ok => { bad2 = !ok; } }); } catch (e) { bad2 = true; } if (bad2) return err('That value is not valid for ' + v.f + '. EAN-13 needs 12–13 digits, UPC-A 11–12, EAN-8 7–8.'); const b = await toBlob(c, 'image/png'); return '<div class="qt-result"><img src="' + URL.createObjectURL(b) + '" alt="Barcode" style="max-width:100%;background:#fff"><div style="margin:8px 0">' + link(b, 'barcode-' + v.f.toLowerCase() + '.png') + '</div></div>'; });
-  return out;
-})(),
-
-/* ---------- 10. CLOCKS, TIMERS, WIDGETS & DECISION TOOLS ---------- */
-...(function () {
-  'use strict';
-  const { esc, num, opt, bad, fmt, err, kv, table, pre, el, N, S, A, SEL, D, RNG, T } = globalThis.QTH;
-  const CW = 'Clocks, Timers & Widgets';
-  const out = []; const push = (...a) => out.push(T(...a));
-  const btn = (txt, on, css) => el('button', { type: 'button', style: 'padding:9px 16px;margin:4px 6px 4px 0;border:0;border-radius:8px;background:#2563eb;color:#fff;font-weight:600;cursor:pointer;' + (css || ''), onclick: on }, txt);
-  const rnd = n => crypto.getRandomValues(new Uint32Array(1))[0] % n;
-  const beep = (f, d) => { try { const c = new (window.AudioContext || window.webkitAudioContext)(), o = c.createOscillator(), g = c.createGain(); o.frequency.value = f || 880; g.gain.value = .2; o.connect(g).connect(c.destination); o.start(); setTimeout(() => { o.stop(); c.close(); }, d || 300); } catch (e) { } };
-  const clean = s => String(s || '').split('\n').map(x => x.trim()).filter(Boolean);
-
-  push('lucky-decision-spin-wheel', 'Lucky Decision Spin Wheel', CW, 'fa-solid fa-dharmachakra', 'Enter your options and spin an interactive wheel to decide.', [A('o', 'Options (one per line)', 'Pizza\nBurgers\nSushi\nBiryani\nTacos\nSalad', { rows: 8 }), SEL('r', 'Remove winner after each spin', ['No', 'Yes'])], 'Build Wheel', v => {
-    let items = clean(v.o); if (items.length < 2) return err('Enter at least two options.'); if (items.length > 40) items = items.slice(0, 40); const c = el('canvas', { width: 440, height: 440, style: 'max-width:100%;display:block;margin:0 auto' }), g = c.getContext('2d'), res = el('div', { style: 'font-size:1.5em;font-weight:700;text-align:center;margin-top:10px;min-height:1.6em' }, 'Press SPIN!'); let ang = 0, spin = false;
-    const draw = () => { const n = items.length, s = 2 * Math.PI / n, R = 200; g.clearRect(0, 0, 440, 440); g.save(); g.translate(220, 226); items.forEach((t, i) => { g.beginPath(); g.moveTo(0, 0); g.arc(0, 0, R, ang + i * s, ang + (i + 1) * s); g.closePath(); g.fillStyle = 'hsl(' + (i * 360 / n + 10) + ',70%,55%)'; g.fill(); g.strokeStyle = '#fff'; g.lineWidth = 2; g.stroke(); g.save(); g.rotate(ang + (i + .5) * s); g.textAlign = 'right'; g.fillStyle = '#fff'; g.font = '600 ' + Math.max(11, Math.min(20, 300 / n + 6)) + 'px Arial'; g.shadowColor = 'rgba(0,0,0,.5)'; g.shadowBlur = 3; g.fillText(t.length > 18 ? t.slice(0, 17) + '…' : t, R - 14, 6); g.restore(); }); g.beginPath(); g.arc(0, 0, 22, 0, 7); g.fillStyle = '#fff'; g.fill(); g.restore(); g.beginPath(); g.moveTo(220, 40); g.lineTo(204, 8); g.lineTo(236, 8); g.closePath(); g.fillStyle = '#111827'; g.fill(); };
-    const go = () => { if (spin) return; if (items.length < 2) { res.textContent = 'Add more options to keep spinning.'; return; } spin = true; const total = (5 + Math.random() * 3) * 2 * Math.PI + Math.random() * 2 * Math.PI, a0 = ang, T0 = performance.now(), dur = 4200; const step = t => { const k = Math.min(1, (t - T0) / dur), e = 1 - Math.pow(1 - k, 4); ang = a0 + total * e; draw(); if (k < 1) requestAnimationFrame(step); else { spin = false; const s = 2 * Math.PI / items.length, w = Math.floor((((1.5 * Math.PI - ang) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) / s); res.textContent = '🎉 ' + items[w]; if (v.r === 'Yes') { items.splice(w, 1); setTimeout(draw, 1200); } } }; requestAnimationFrame(step); };
-    draw(); return el('div', { class: 'qt-result', style: 'text-align:center' }, c, btn('🎡 SPIN', go, 'font-size:1.1em;margin-top:10px'), res);
-  });
-  push('dice-roller', 'Dice Roller', CW, 'fa-solid fa-dice', 'Roll one or many dice (d4 to d100) with totals.', [N('n', 'Number of dice (1–50)', '2', { value: 2 }), SEL('s', 'Sides', ['6', '4', '8', '10', '12', '20', '100']), N('m', 'Modifier (+/−)', '0', { value: 0 })], 'Roll Dice', v => { const n = Math.round(num(v.n)), s = +v.s, m = opt(v.m); if (bad(n) || n < 1 || n > 50) return err('Roll 1–50 dice.'); const r = Array.from({ length: n }, () => rnd(s) + 1), t = r.reduce((a, b) => a + b, 0); const face = x => s === 6 ? '⚀⚁⚂⚃⚄⚅'[x - 1] : x; return '<div class="qt-result"><div style="font-size:' + (s === 6 ? '2.4em' : '1.5em') + ';letter-spacing:.15em">' + r.map(face).join(' ') + '</div>' + kv([['Rolls', r.join(' + ')], ['Total' + (m ? ' (with ' + (m > 0 ? '+' : '') + m + ')' : ''), '<b>' + (t + m) + '</b>'], ['Average', fmt(t / n, 2)]]) + '</div>'; });
-  push('coin-flipper', 'Coin Flipper', CW, 'fa-solid fa-coins', 'Flip a fair coin once or many times.', [N('n', 'Number of flips (1–1000)', '1', { value: 1 })], 'Flip Coin', v => { const n = Math.round(num(v.n)); if (bad(n) || n < 1 || n > 1000) return err('Flip 1–1000 times.'); let h = 0; const r = []; for (let i = 0; i < n; i++) { const x = rnd(2); h += x; if (i < 30) r.push(x ? 'H' : 'T'); } return n === 1 ? '<div class="qt-result" style="text-align:center;font-size:2em;font-weight:700">' + (h ? '🪙 HEADS' : '🪙 TAILS') + '</div>' : kv([['Heads', h + ' (' + fmt(h / n * 100, 1) + '%)'], ['Tails', (n - h) + ' (' + fmt((n - h) / n * 100, 1) + '%)'], ['First flips', r.join(' ') + (n > 30 ? ' …' : '')]]); });
-  const ZONES = ['UTC', 'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'America/Toronto', 'America/Mexico_City', 'America/Sao_Paulo', 'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Madrid', 'Europe/Rome', 'Europe/Moscow', 'Africa/Cairo', 'Africa/Johannesburg', 'Asia/Dubai', 'Asia/Karachi', 'Asia/Kolkata', 'Asia/Dhaka', 'Asia/Bangkok', 'Asia/Singapore', 'Asia/Shanghai', 'Asia/Tokyo', 'Asia/Seoul', 'Australia/Sydney', 'Pacific/Auckland'];
-  const offMs = (d, tz) => { const p = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).formatToParts(d).reduce((a, x) => (a[x.type] = x.value, a), {}); return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - Math.floor(d.getTime() / 1000) * 1000; };
-  const toUtc = (y, mo, d, h, mi, tz) => { const g = Date.UTC(y, mo - 1, d, h, mi); let t = g - offMs(new Date(g), tz); t = g - offMs(new Date(t), tz); return t; };
-  const lbl = (ms, tz) => { const o = offMs(new Date(ms), tz) / 36e5; return 'UTC' + (o >= 0 ? '+' : '−') + Math.floor(Math.abs(o)) + (Math.abs(o) % 1 ? ':' + String(Math.round(Math.abs(o) % 1 * 60)).padStart(2, '0') : ''); };
-  push('world-clock', 'Multi-City World Clock', CW, 'fa-solid fa-globe', 'Live clocks for any cities/time zones (IANA names, one per line).', [A('z', 'Time zones (one per line)', 'America/New_York\nEurope/London\nAsia/Kolkata\nAsia/Tokyo\nAustralia/Sydney\nAmerica/Los_Angeles', { rows: 7 })], 'Show Clocks', v => { const z = clean(v.z).slice(0, 24); if (!z.length) return err('Enter at least one time zone.'); for (const t of z) { try { new Intl.DateTimeFormat('en', { timeZone: t }); } catch (e) { return err('Unknown time zone: ' + t + '. Use names like Europe/Paris.'); } } const w = el('div', { class: 'qt-result' }), upd = () => { const n = Date.now(); w.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px">' + z.map(t => { const d = new Date(n); return '<div style="padding:12px;border:1px solid rgba(128,128,128,.35);border-radius:10px"><div style="opacity:.75;font-size:.85em">' + esc(t.split('/').pop().replace(/_/g, ' ')) + ' · ' + lbl(n, t) + '</div><div style="font-size:1.7em;font-weight:700;font-variant-numeric:tabular-nums">' + new Intl.DateTimeFormat('en-GB', { timeZone: t, hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).format(d) + '</div><div style="opacity:.75;font-size:.85em">' + new Intl.DateTimeFormat('en-GB', { timeZone: t, weekday: 'short', day: 'numeric', month: 'short' }).format(d) + '</div></div>'; }).join('') + '</div>'; }; upd(); const t = setInterval(() => { if (!w.isConnected) return clearInterval(t); upd(); }, 1000); return w; });
-  push('timezone-converter', 'Time Zone Converter', CW, 'fa-solid fa-earth-asia', 'Convert a date and time from one zone to many others (handles daylight saving).', [{ id: 'dt', label: 'Date & time', type: 'datetime-local', value: new Date().toISOString().slice(0, 16) }, SEL('from', 'From zone', ZONES, 'America/New_York'), A('to', 'Convert to (zones, one per line)', 'Europe/London\nAsia/Kolkata\nAsia/Tokyo\nAustralia/Sydney\nUTC', { rows: 5 })], 'Convert Time', v => { const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(v.dt || ''); if (!m) return err('Choose a date and time.'); const t = toUtc(+m[1], +m[2], +m[3], +m[4], +m[5], v.from), z = clean(v.to).slice(0, 30); const f = (ms, tz) => new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms)); try { return kv([[esc(v.from) + ' (' + lbl(t, v.from) + ')', '<b>' + f(t, v.from) + '</b>']].concat(z.map(x => [esc(x) + ' (' + lbl(t, x) + ')', f(t, x)]))); } catch (e) { return err('Unknown time zone in the list. Use names like Asia/Kolkata.'); } });
-  push('stopwatch-lap-counter', 'Stopwatch with Lap Counter', CW, 'fa-solid fa-stopwatch', 'Precise stopwatch with lap and split times.', [SEL('x', 'Display', ['MM:SS.cc', 'HH:MM:SS.cc'])], 'Open Stopwatch', v => { let t0 = 0, acc = 0, run = false, tm, laps = [], last = 0; const f = ms => { const c = Math.floor(ms / 10) % 100, s = Math.floor(ms / 1000) % 60, m = Math.floor(ms / 60000) % 60, h = Math.floor(ms / 36e5), p = n => String(n).padStart(2, '0'); return (v.x[0] === 'H' ? p(h) + ':' : '') + p(v.x[0] === 'H' ? m : m + h * 60) + ':' + p(s) + '.' + p(c); }, cur = () => acc + (run ? performance.now() - t0 : 0), disp = el('div', { style: 'font-size:2.6em;font-weight:700;font-variant-numeric:tabular-nums;text-align:center' }, f(0)), list = el('div', { style: 'max-height:240px;overflow:auto;margin-top:8px' }), w = el('div', { class: 'qt-result' }); const tick = () => { if (!w.isConnected) return clearInterval(tm); disp.textContent = f(cur()); }, bs = btn('▶ Start', () => { if (run) { acc += performance.now() - t0; run = false; bs.textContent = '▶ Resume'; clearInterval(tm); tick(); } else { t0 = performance.now(); run = true; bs.textContent = '❚❚ Pause'; tm = setInterval(tick, 30); } }), bl = btn('⚑ Lap', () => { if (!run) return; const n = cur(); laps.unshift([laps.length + 1, f(n - last), f(n)]); last = n; list.innerHTML = table(['Lap', 'Split', 'Total'], laps); }, 'background:#475569'), br = btn('↺ Reset', () => { run = false; acc = 0; last = 0; laps = []; clearInterval(tm); disp.textContent = f(0); list.innerHTML = ''; bs.textContent = '▶ Start'; }, 'background:#475569'); w.append(disp, el('div', { style: 'text-align:center' }, bs, bl, br), list); return w; });
-  push('pomodoro-focus-timer', 'Pomodoro Focus Timer', CW, 'fa-solid fa-hourglass-start', 'Work/break cycles with sound alerts to stay focused.', [N('w', 'Focus (minutes)', '25', { value: 25 }), N('b', 'Short break (min)', '5', { value: 5 }), N('l', 'Long break (min)', '15', { value: 15 }), N('c', 'Sessions before long break', '4', { value: 4 })], 'Start Pomodoro', v => { const W = num(v.w), B = num(v.b), L = num(v.l), C = Math.round(num(v.c)); if (bad(W, B, L, C) || W <= 0 || B <= 0 || L <= 0 || C < 1) return err('Enter positive minutes and sessions.'); let phase = 'Focus', done = 0, left = W * 60, run = false, tm; const disp = el('div', { style: 'font-size:3em;font-weight:700;text-align:center;font-variant-numeric:tabular-nums' }), lab = el('div', { style: 'text-align:center;font-weight:600;font-size:1.1em' }), cnt = el('div', { style: 'text-align:center;opacity:.75' }), w = el('div', { class: 'qt-result' }); const f = s => String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'), draw = () => { disp.textContent = f(left); lab.textContent = (phase === 'Focus' ? '🍅 ' : '☕ ') + phase; cnt.textContent = 'Completed focus sessions: ' + done; }, next = () => { beep(phase === 'Focus' ? 880 : 520, 600); if (phase === 'Focus') { done++; phase = done % C === 0 ? 'Long break' : 'Short break'; left = (phase === 'Long break' ? L : B) * 60; } else { phase = 'Focus'; left = W * 60; } draw(); }; const tick = () => { if (!w.isConnected) return clearInterval(tm); if (!run) return; left--; if (left <= 0) next(); else draw(); }; const bs = btn('▶ Start', () => { run = !run; bs.textContent = run ? '❚❚ Pause' : '▶ Resume'; if (!tm) tm = setInterval(tick, 1000); }), bk = btn('⏭ Skip', next, 'background:#475569'); draw(); w.append(lab, disp, cnt, el('div', { style: 'text-align:center' }, bs, bk)); return w; });
-  push('countdown-timer', 'Countdown Timer', CW, 'fa-solid fa-hourglass-half', 'Simple countdown with an alarm when time is up.', [N('h', 'Hours', '0', { value: 0 }), N('m', 'Minutes', '5', { value: 5 }), N('s', 'Seconds', '0', { value: 0 })], 'Start Countdown', v => { let t = Math.round(opt(v.h) * 3600 + opt(v.m) * 60 + opt(v.s)); if (t <= 0 || t > 86400) return err('Choose a duration up to 24 hours.'); const end = Date.now() + t * 1000; const f = s => [s / 3600 | 0, s % 3600 / 60 | 0, s % 60].map(n => String(n).padStart(2, '0')).join(':'), d = el('div', { style: 'font-size:3em;font-weight:700;text-align:center;font-variant-numeric:tabular-nums' }, f(t)), w = el('div', { class: 'qt-result' }, d); const tm = setInterval(() => { if (!w.isConnected) return clearInterval(tm); const r = Math.max(0, Math.round((end - Date.now()) / 1000)); d.textContent = r ? f(r) : '⏰ Time\'s up!'; if (!r) { clearInterval(tm); [0, 500, 1000].forEach(x => setTimeout(() => beep(880, 300), x)); } }, 250); return w; });
-  const MORSE = { A: '.-', B: '-...', C: '-.-.', D: '-..', E: '.', F: '..-.', G: '--.', H: '....', I: '..', J: '.---', K: '-.-', L: '.-..', M: '--', N: '-.', O: '---', P: '.--.', Q: '--.-', R: '.-.', S: '...', T: '-', U: '..-', V: '...-', W: '.--', X: '-..-', Y: '-.--', Z: '--..', 0: '-----', 1: '.----', 2: '..---', 3: '...--', 4: '....-', 5: '.....', 6: '-....', 7: '--...', 8: '---..', 9: '----.', '.': '.-.-.-', ',': '--..--', '?': '..--..', '\'': '.----.', '!': '-.-.--', '/': '-..-.', '(': '-.--.', ')': '-.--.-', '&': '.-...', ':': '---...', ';': '-.-.-.', '=': '-...-', '+': '.-.-.', '-': '-....-', '_': '..--.-', '"': '.-..-.', '$': '...-..-', '@': '.--.-.' };
-  const REV = Object.fromEntries(Object.entries(MORSE).map(([k, x]) => [x, k]));
-  push('morse-code-translator', 'Morse Code Translator & Audio Beeper', CW, 'fa-solid fa-signal', 'Translate text to Morse and back, and play it as audio beeps.', [A('t', 'Text or Morse (use . and -, space between letters, / between words)', 'SOS HELLO', { rows: 4 }), SEL('m', 'Direction', [['enc', 'Text → Morse'], ['dec', 'Morse → Text']]), N('wpm', 'Playback speed (WPM)', '15', { value: 15, min: 5, max: 30 }), N('f', 'Tone (Hz)', '600', { value: 600 })], 'Translate', v => { const s = String(v.t || '').trim(); if (!s) return err('Enter some text.'); let r; if (v.m === 'enc') { r = s.toUpperCase().split(/\s+/).map(w => [...w].map(c => MORSE[c]).filter(Boolean).join(' ')).filter(Boolean).join(' / '); } else r = s.replace(/[·•]/g, '.').replace(/[–—−_]/g, '-').split(/\s*\/\s*|\s{3,}/).map(w => w.trim().split(/\s+/).map(c => REV[c] || '?').join('')).join(' '); if (!r) return err('Nothing could be translated.'); const morse = v.m === 'enc' ? r : s, w = el('div', { class: 'qt-result' }, el('textarea', { readonly: '', rows: 4, style: 'width:100%;font-family:monospace;font-size:1.1em', onclick: e => e.target.select() }, r)); const unit = 1.2 / Math.max(5, Math.min(30, num(v.wpm) || 15)); const play = () => { try { const c = new (window.AudioContext || window.webkitAudioContext)(); let t = c.currentTime + .1; for (const ch of morse) { if (ch === '.' || ch === '-') { const o = c.createOscillator(), g = c.createGain(), d = (ch === '.' ? 1 : 3) * unit; o.frequency.value = num(v.f) || 600; g.gain.setValueAtTime(.2, t); g.gain.setValueAtTime(0, t + d); o.connect(g).connect(c.destination); o.start(t); o.stop(t + d); t += d + unit; } else if (ch === '/') t += 4 * unit; else if (ch === ' ') t += 2 * unit; } setTimeout(() => c.close(), (t - c.currentTime + .5) * 1000); } catch (e) { } }; w.append(btn('🔊 Play Morse audio', play)); return w; });
-  const bytes = s => new TextEncoder().encode(s);
-  push('binary-hex-ascii-converter', 'Binary / Hex / ASCII Converter', CW, 'fa-solid fa-microchip', 'Convert text to binary, hex, decimal and octal — and decode them back to text.', [A('t', 'Input', 'Hello', { rows: 4 }), SEL('m', 'Mode', [['enc', 'Text → Binary, Hex, Decimal, Octal'], ['bin', 'Binary → Text'], ['hex', 'Hex → Text'], ['dec', 'Decimal (ASCII codes) → Text'], ['oct', 'Octal → Text']])], 'Convert', v => { const s = String(v.t || ''); if (!s.trim()) return err('Enter some input.'); if (v.m === 'enc') { const b = [...bytes(s)], pad = (n, r, l) => n.toString(r).padStart(l, '0'); return kv([['Binary', '<code>' + b.map(x => pad(x, 2, 8)).join(' ') + '</code>'], ['Hex', '<code>' + b.map(x => pad(x, 16, 2).toUpperCase()).join(' ') + '</code>'], ['Decimal', '<code>' + b.join(' ') + '</code>'], ['Octal', '<code>' + b.map(x => pad(x, 8, 3)).join(' ') + '</code>']]); } const rad = { bin: 2, hex: 16, dec: 10, oct: 8 }[v.m], tok = s.trim().replace(/0x/gi, '').split(/[\s,]+/).filter(Boolean); let a; if (v.m === 'bin' && tok.length === 1 && tok[0].length > 8) a = tok[0].match(/.{1,8}/g).map(x => parseInt(x, 2)); else if (v.m === 'hex' && tok.length === 1 && tok[0].length > 2) a = tok[0].match(/.{1,2}/g).map(x => parseInt(x, 16)); else a = tok.map(x => parseInt(x, rad)); if (a.some(x => !isFinite(x) || x < 0 || x > 255)) return err('Invalid input for this mode (values must map to bytes 0–255).'); return kv([['Text', '<b>' + esc(new TextDecoder().decode(new Uint8Array(a))) + '</b>']]); });
-  push('random-name-picker', 'Random Name Picker / Draw', CW, 'fa-solid fa-user-check', 'Draw one or more winners from a list, or split names into teams.', [A('n', 'Names (one per line)', 'Asha\nBen\nChloe\nDev\nEli\nFatima', { rows: 7 }), N('k', 'Winners to pick', '1', { value: 1 }), SEL('m', 'Mode', [['pick', 'Pick winners'], ['teams', 'Split into teams (Winners field = number of teams)']])], 'Draw', v => { const a = clean(v.n), k = Math.round(num(v.k)); if (a.length < 2 || bad(k) || k < 1) return err('Enter at least two names and a valid number.'); for (let i = a.length - 1; i > 0; i--) { const j = rnd(i + 1); [a[i], a[j]] = [a[j], a[i]]; } if (v.m === 'pick') { if (k > a.length) return err('You cannot pick more winners than names.'); return '<div class="qt-result"><b>🏆 Winner' + (k > 1 ? 's' : '') + ':</b> ' + esc(a.slice(0, k).join(', ')) + '</div>'; } if (k > a.length) return err('More teams than people.'); const t = Array.from({ length: k }, () => []); a.forEach((x, i) => t[i % k].push(x)); return kv(t.map((x, i) => ['Team ' + (i + 1), esc(x.join(', '))])); });
-  push('yes-no-decision-maker', 'Yes / No Decision Maker', CW, 'fa-solid fa-circle-question', 'Let chance answer a yes/no question (or pick between A and B).', [S('q', 'Your question (optional)', 'Should I go for a walk?'), S('a', 'Option A', 'Yes', { value: 'Yes' }), S('b', 'Option B', 'No', { value: 'No' })], 'Decide', v => { const o = [String(v.a || 'Yes'), String(v.b || 'No')], r = o[rnd(2)]; return '<div class="qt-result" style="text-align:center">' + (v.q ? '<div style="opacity:.75">' + esc(v.q) + '</div>' : '') + '<div style="font-size:2.2em;font-weight:700">🎲 ' + esc(r) + '</div></div>'; });
-
-  return out;
-})()
+ * processing: "browser" = runs locally in the visitor's browser;
+ *   "server" = needs your backend; "external-api" = needs a third-party service or ML model.
+ * Tools with "server"/"external-api" should not be shown as live until that backend exists.
+ */
+const TOOL_CATEGORIES = [
+  {
+    "id": "pdf-tools",
+    "slug": "pdf-tools",
+    "name": "PDF Tools",
+    "icon": "file-text",
+    "description": "Merge, split, convert, and edit PDF files.",
+    "order": 1
+  },
+  {
+    "id": "image-tools",
+    "slug": "image-tools",
+    "name": "Image Tools",
+    "icon": "image",
+    "description": "Resize, compress, convert, and analyze images.",
+    "order": 2
+  },
+  {
+    "id": "photo-editing-tools",
+    "slug": "photo-editing-tools",
+    "name": "Photo Editing Tools",
+    "icon": "wand",
+    "description": "Edit, enhance, and create with photos.",
+    "order": 3
+  },
+  {
+    "id": "video-tools",
+    "slug": "video-tools",
+    "name": "Video Tools",
+    "icon": "video",
+    "description": "Compress, trim, convert, and edit videos.",
+    "order": 4
+  },
+  {
+    "id": "text-writing-tools",
+    "slug": "text-writing-tools",
+    "name": "Text & Writing Tools",
+    "icon": "type",
+    "description": "Count, convert, and generate text.",
+    "order": 5
+  },
+  {
+    "id": "seo-tools",
+    "slug": "seo-tools",
+    "name": "SEO Tools",
+    "icon": "search",
+    "description": "Improve how your site appears in search.",
+    "order": 6
+  },
+  {
+    "id": "developer-tools",
+    "slug": "developer-tools",
+    "name": "Developer Tools",
+    "icon": "code",
+    "description": "Format, encode, and minify code and data.",
+    "order": 7
+  },
+  {
+    "id": "calculators-converters",
+    "slug": "calculators-converters",
+    "name": "Calculators & Converters",
+    "icon": "calculator",
+    "description": "Everyday calculators and unit converters.",
+    "order": 8
+  },
+  {
+    "id": "qr-social-media-tools",
+    "slug": "qr-social-media-tools",
+    "name": "QR & Social Media Tools",
+    "icon": "qr-code",
+    "description": "QR codes, barcodes, and social media helpers.",
+    "order": 9
+  },
+  {
+    "id": "security-utility-tools",
+    "slug": "security-utility-tools",
+    "name": "Security & Utility Tools",
+    "icon": "shield",
+    "description": "Passwords, hashes, timers, and handy utilities.",
+    "order": 10
+  }
 ];
+
+const TOOLS = [
+  {
+    "id": "tool-001",
+    "slug": "pdf-merge",
+    "name": "PDF Merge",
+    "category": "pdf-tools",
+    "shortDescription": "Combine several PDF files into one document in the order you choose.",
+    "howToUse": "Add two or more PDFs, drag them into the order you want, and click Merge. Download the combined file when it finishes. Files are processed in your browser, so they are not uploaded.",
+    "features": [
+      "Merge unlimited files within your device's memory",
+      "Drag-and-drop reordering",
+      "Keeps original page size and quality",
+      "Private browser-based processing"
+    ],
+    "faqs": [
+      {
+        "question": "Will merging reduce the quality of my PDFs?",
+        "answer": "No. Pages are copied into the new file as they are, so text, images, and layout stay unchanged."
+      },
+      {
+        "question": "Can I merge password-protected PDFs?",
+        "answer": "Not directly. Remove the password first with the PDF Unlock tool, then merge the files."
+      }
+    ],
+    "seoTitle": "Merge PDF Files Online – Free PDF Merger",
+    "metaDescription": "Combine multiple PDF files into one document in seconds. Reorder files, merge privately in your browser, and download the result for free.",
+    "keywords": [
+      "merge pdf",
+      "combine pdf",
+      "pdf merger",
+      "join pdf files"
+    ],
+    "icon": "file-merge",
+    "toolType": "file-processor",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-002",
+    "slug": "pdf-split",
+    "name": "PDF Split",
+    "category": "pdf-tools",
+    "shortDescription": "Split a PDF into separate files by page range or into single pages.",
+    "howToUse": "Upload a PDF, choose whether to split every page or by custom ranges such as 1-3, 4-8, then click Split. Download each part individually or as a ZIP archive.",
+    "features": [
+      "Split by range or every page",
+      "Preview page thumbnails",
+      "Download as individual files or ZIP",
+      "Runs locally in your browser"
+    ],
+    "faqs": [
+      {
+        "question": "How do I split a PDF into individual pages?",
+        "answer": "Choose the 'every page' option and each page is saved as its own PDF file."
+      },
+      {
+        "question": "Is there a page limit?",
+        "answer": "The practical limit depends on your device's memory. Very large PDFs may take longer to process."
+      }
+    ],
+    "seoTitle": "Split PDF Online – Free PDF Splitter",
+    "metaDescription": "Split a PDF by page range or into single pages. Fast, private browser-based PDF splitting with no sign-up required.",
+    "keywords": [
+      "split pdf",
+      "pdf splitter",
+      "separate pdf pages",
+      "divide pdf"
+    ],
+    "icon": "file-split",
+    "toolType": "file-processor",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-003",
+    "slug": "pdf-compressor",
+    "name": "PDF Compressor",
+    "category": "pdf-tools",
+    "shortDescription": "Reduce PDF file size so documents are easier to email and upload.",
+    "howToUse": "Upload a PDF, pick a compression level, and click Compress. Compare the original and new sizes, then download the result. Higher compression may lower image quality.",
+    "features": [
+      "Multiple compression levels",
+      "Before and after size comparison",
+      "Optimizes embedded images",
+      "Best results on image-heavy PDFs"
+    ],
+    "faqs": [
+      {
+        "question": "How much smaller will my PDF get?",
+        "answer": "It depends on the content. PDFs with large images often shrink a lot, while text-only files may change very little."
+      },
+      {
+        "question": "Will text remain selectable after compression?",
+        "answer": "Yes, in most cases. Compression mainly targets images and unused data, not text."
+      }
+    ],
+    "seoTitle": "Compress PDF Online – Reduce PDF File Size",
+    "metaDescription": "Shrink PDF files for email and uploads. Choose a compression level and compare sizes before you download. Free and easy to use.",
+    "keywords": [
+      "compress pdf",
+      "reduce pdf size",
+      "pdf compressor",
+      "shrink pdf"
+    ],
+    "icon": "file-compress",
+    "toolType": "file-processor",
+    "processing": "browser",
+    "implementationNote": "Browser compression mainly recompresses images; for deep optimization a server-side tool such as Ghostscript gives stronger results."
+  },
+  {
+    "id": "tool-004",
+    "slug": "pdf-to-word",
+    "name": "PDF to Word",
+    "category": "pdf-tools",
+    "shortDescription": "Convert a PDF into an editable Word (.docx) document.",
+    "howToUse": "Upload your PDF and click Convert. When processing finishes, download the .docx file. Complex layouts may need minor cleanup after conversion.",
+    "features": [
+      "Outputs editable .docx files",
+      "Keeps basic text and headings",
+      "Handles multi-page documents",
+      "Server-side processing for better layout recovery"
+    ],
+    "faqs": [
+      {
+        "question": "Will the formatting stay exactly the same?",
+        "answer": "Simple documents convert well, but tables, columns, and unusual fonts can shift. Review the result before sharing it."
+      },
+      {
+        "question": "Can it convert scanned PDFs?",
+        "answer": "Scanned PDFs are images, so they need OCR to become editable text. Results depend on scan quality."
+      }
+    ],
+    "seoTitle": "PDF to Word Converter – Convert PDF to DOCX",
+    "metaDescription": "Convert PDF files to editable Word documents online. Upload, convert, and download a .docx file quickly and easily.",
+    "keywords": [
+      "pdf to word",
+      "pdf to docx",
+      "convert pdf to word",
+      "editable pdf"
+    ],
+    "icon": "file-word",
+    "toolType": "file-converter",
+    "processing": "server",
+    "implementationNote": "Requires a server-side converter (for example LibreOffice or a conversion library). Files are uploaded for processing and should be deleted after conversion."
+  },
+  {
+    "id": "tool-005",
+    "slug": "word-to-pdf",
+    "name": "Word to PDF",
+    "category": "pdf-tools",
+    "shortDescription": "Turn Word documents (.doc and .docx) into PDF files.",
+    "howToUse": "Upload a Word file and click Convert to PDF. Download the finished PDF once it is ready. Fonts missing on the server may be substituted.",
+    "features": [
+      "Supports .doc and .docx",
+      "Keeps text, images, and basic layout",
+      "Creates shareable PDFs",
+      "Server-side processing"
+    ],
+    "faqs": [
+      {
+        "question": "Why does my PDF look slightly different from Word?",
+        "answer": "If a font used in your document is not available during conversion, a similar font is substituted."
+      },
+      {
+        "question": "Are my files stored after conversion?",
+        "answer": "Uploaded files should be deleted automatically after processing. Check the site's privacy policy for retention details."
+      }
+    ],
+    "seoTitle": "Word to PDF Converter – Convert DOCX to PDF",
+    "metaDescription": "Convert Word documents to PDF online. Upload a .doc or .docx file and download a ready-to-share PDF in moments.",
+    "keywords": [
+      "word to pdf",
+      "docx to pdf",
+      "convert word to pdf",
+      "doc to pdf"
+    ],
+    "icon": "file-pdf",
+    "toolType": "file-converter",
+    "processing": "server",
+    "implementationNote": "Requires a server-side converter such as LibreOffice headless."
+  },
+  {
+    "id": "tool-006",
+    "slug": "pdf-to-jpg",
+    "name": "PDF to JPG",
+    "category": "pdf-tools",
+    "shortDescription": "Convert each page of a PDF into a JPG image.",
+    "howToUse": "Upload a PDF, choose image quality, and click Convert. Download pages as individual JPG files or as a ZIP archive.",
+    "features": [
+      "One image per page",
+      "Adjustable quality and resolution",
+      "ZIP download for multi-page files",
+      "Processed in your browser"
+    ],
+    "faqs": [
+      {
+        "question": "What resolution will my images have?",
+        "answer": "You can pick a resolution. Higher settings give sharper images but larger files."
+      },
+      {
+        "question": "Can I convert only certain pages?",
+        "answer": "Yes. Select the pages you want before converting, or use the PDF Page Extractor first."
+      }
+    ],
+    "seoTitle": "PDF to JPG Converter – Convert PDF Pages to Images",
+    "metaDescription": "Convert PDF pages to high-quality JPG images online. Choose quality, convert in your browser, and download instantly.",
+    "keywords": [
+      "pdf to jpg",
+      "pdf to image",
+      "convert pdf to jpeg",
+      "pdf page to image"
+    ],
+    "icon": "file-image",
+    "toolType": "file-converter",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-007",
+    "slug": "jpg-to-pdf",
+    "name": "JPG to PDF",
+    "category": "pdf-tools",
+    "shortDescription": "Combine one or more JPG images into a single PDF.",
+    "howToUse": "Add your images, arrange them in order, choose page size and orientation, and click Create PDF. Download the finished file.",
+    "features": [
+      "Multiple images in one PDF",
+      "Page size and margin options",
+      "Drag-and-drop ordering",
+      "Private browser processing"
+    ],
+    "faqs": [
+      {
+        "question": "Can I put several photos in one PDF?",
+        "answer": "Yes. Add them all, reorder as needed, and each image becomes its own page."
+      },
+      {
+        "question": "Do the images lose quality?",
+        "answer": "Images are embedded without extra compression, so quality stays close to the original."
+      }
+    ],
+    "seoTitle": "JPG to PDF Converter – Images to PDF Online",
+    "metaDescription": "Turn JPG images into a PDF in seconds. Set page size, reorder photos, and download your PDF privately in your browser.",
+    "keywords": [
+      "jpg to pdf",
+      "image to pdf",
+      "photos to pdf",
+      "jpeg to pdf"
+    ],
+    "icon": "image-pdf",
+    "toolType": "file-converter",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-008",
+    "slug": "pdf-unlock",
+    "name": "PDF Unlock",
+    "category": "pdf-tools",
+    "shortDescription": "Remove a known password from a PDF you own so it opens without prompts.",
+    "howToUse": "Upload the protected PDF, enter the password you already know, and click Unlock. Download the unprotected copy. This tool cannot recover forgotten passwords.",
+    "features": [
+      "Removes password protection when you know the password",
+      "Works locally in your browser",
+      "Keeps content unchanged",
+      "Does not crack or guess passwords"
+    ],
+    "faqs": [
+      {
+        "question": "Can this recover a forgotten password?",
+        "answer": "No. You must know the current password. The tool only removes protection from files you are allowed to open."
+      },
+      {
+        "question": "Is it legal to unlock a PDF?",
+        "answer": "Unlocking your own documents is fine. Only unlock files you have permission to modify."
+      }
+    ],
+    "seoTitle": "Unlock PDF Online – Remove PDF Password",
+    "metaDescription": "Remove password protection from a PDF when you know the password. Private, browser-based unlocking with no sign-up.",
+    "keywords": [
+      "unlock pdf",
+      "remove pdf password",
+      "pdf password remover",
+      "decrypt pdf"
+    ],
+    "icon": "lock-open",
+    "toolType": "file-processor",
+    "processing": "browser",
+    "implementationNote": "Browser-side decryption needs a library that supports encrypted PDFs; verify support for AES-256 files before launch."
+  },
+  {
+    "id": "tool-009",
+    "slug": "pdf-rotate",
+    "name": "PDF Rotate",
+    "category": "pdf-tools",
+    "shortDescription": "Rotate PDF pages by 90, 180, or 270 degrees and save the result.",
+    "howToUse": "Upload your PDF, select all pages or specific ones, choose a rotation angle, and click Rotate. Download the corrected file.",
+    "features": [
+      "Rotate all or selected pages",
+      "90, 180, and 270 degree options",
+      "Live page thumbnails",
+      "Browser-based and private"
+    ],
+    "faqs": [
+      {
+        "question": "Can I rotate only one page?",
+        "answer": "Yes. Select just that page, then apply the rotation."
+      },
+      {
+        "question": "Is the rotation permanent?",
+        "answer": "Yes, the downloaded PDF is saved with the new orientation."
+      }
+    ],
+    "seoTitle": "Rotate PDF Pages Online – Free PDF Rotator",
+    "metaDescription": "Rotate PDF pages 90, 180, or 270 degrees. Fix sideways scans quickly and download the corrected PDF for free.",
+    "keywords": [
+      "rotate pdf",
+      "pdf rotator",
+      "flip pdf page",
+      "fix sideways pdf"
+    ],
+    "icon": "rotate",
+    "toolType": "file-processor",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-010",
+    "slug": "pdf-page-extractor",
+    "name": "PDF Page Extractor",
+    "category": "pdf-tools",
+    "shortDescription": "Pull selected pages out of a PDF into a new, smaller document.",
+    "howToUse": "Upload a PDF, enter the pages you need (for example 2, 5, 8-10), and click Extract. Download the new PDF containing only those pages.",
+    "features": [
+      "Select by number or range",
+      "Visual page thumbnails",
+      "Keeps original quality",
+      "Processed locally"
+    ],
+    "faqs": [
+      {
+        "question": "What is the difference between extracting and splitting?",
+        "answer": "Extracting creates one new file from chosen pages. Splitting divides a document into several files."
+      },
+      {
+        "question": "Does the original PDF change?",
+        "answer": "No. Your original file is untouched; you get a separate new PDF."
+      }
+    ],
+    "seoTitle": "Extract Pages from PDF – Free PDF Page Extractor",
+    "metaDescription": "Extract specific pages from a PDF and save them as a new file. Quick, private, and free to use in your browser.",
+    "keywords": [
+      "extract pdf pages",
+      "pdf page extractor",
+      "save pdf pages",
+      "remove pdf pages"
+    ],
+    "icon": "file-extract",
+    "toolType": "file-processor",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-011",
+    "slug": "image-resizer",
+    "name": "Image Resizer",
+    "category": "image-tools",
+    "shortDescription": "Change the width and height of an image to exact pixel sizes or a percentage.",
+    "howToUse": "Upload an image, enter the new dimensions or a percentage, choose whether to keep the aspect ratio, and click Resize. Download the result in the original format.",
+    "features": [
+      "Pixel and percentage resizing",
+      "Aspect ratio lock",
+      "Common presets for web and social",
+      "Processed in your browser"
+    ],
+    "faqs": [
+      {
+        "question": "Will resizing make my image blurry?",
+        "answer": "Making an image smaller keeps it sharp. Enlarging it beyond its original size can cause softness."
+      },
+      {
+        "question": "How do I keep the proportions?",
+        "answer": "Leave the aspect ratio lock on and change only width or height; the other value updates automatically."
+      }
+    ],
+    "seoTitle": "Resize Image Online – Free Image Resizer",
+    "metaDescription": "Resize images to exact pixel dimensions or percentages. Keep the aspect ratio and download instantly, all in your browser.",
+    "keywords": [
+      "resize image",
+      "image resizer",
+      "change image dimensions",
+      "resize photo"
+    ],
+    "icon": "resize",
+    "toolType": "file-processor",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-012",
+    "slug": "image-compressor",
+    "name": "Image Compressor",
+    "category": "image-tools",
+    "shortDescription": "Reduce the file size of JPG, PNG, and WebP images with adjustable quality.",
+    "howToUse": "Upload images, move the quality slider, and compare the preview with the original. Click Download when the size and quality look right.",
+    "features": [
+      "Adjustable quality slider",
+      "Batch compression",
+      "Size savings shown per file",
+      "No upload to a server"
+    ],
+    "faqs": [
+      {
+        "question": "What quality setting should I use?",
+        "answer": "For web photos, 70 to 80 percent usually looks nearly identical while cutting size significantly."
+      },
+      {
+        "question": "Does PNG compression lose quality?",
+        "answer": "Browser compression of PNG is limited. Converting to WebP or JPG often saves more space."
+      }
+    ],
+    "seoTitle": "Compress Images Online – JPG, PNG, WebP Compressor",
+    "metaDescription": "Shrink image file sizes without noticeable quality loss. Compress JPG, PNG, and WebP files privately in your browser.",
+    "keywords": [
+      "compress image",
+      "image compressor",
+      "reduce image size",
+      "optimize images"
+    ],
+    "icon": "compress",
+    "toolType": "file-processor",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-013",
+    "slug": "image-cropper",
+    "name": "Image Cropper",
+    "category": "image-tools",
+    "shortDescription": "Crop an image to a custom area or a fixed aspect ratio.",
+    "howToUse": "Upload an image, drag the crop box over the area you want, or choose a ratio such as 1:1 or 16:9. Click Crop and download the result.",
+    "features": [
+      "Free-form and fixed-ratio crops",
+      "Drag and resize crop box",
+      "Precise pixel inputs",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Can I crop to a square?",
+        "answer": "Yes. Choose the 1:1 ratio and position the box where you want it."
+      },
+      {
+        "question": "Does cropping change the original file?",
+        "answer": "No. You download a new cropped copy and your original stays as it is."
+      }
+    ],
+    "seoTitle": "Crop Image Online – Free Photo Cropper",
+    "metaDescription": "Crop photos to any size or aspect ratio. Drag, adjust, and download your cropped image instantly in your browser.",
+    "keywords": [
+      "crop image",
+      "photo cropper",
+      "crop picture",
+      "image crop tool"
+    ],
+    "icon": "crop",
+    "toolType": "file-processor",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-014",
+    "slug": "image-converter",
+    "name": "Image Converter",
+    "category": "image-tools",
+    "shortDescription": "Convert images between JPG, PNG, WebP, and other common formats.",
+    "howToUse": "Upload an image, select the output format, and click Convert. Download the new file. Transparency is kept when the target format supports it.",
+    "features": [
+      "Common format support",
+      "Batch conversion",
+      "Adjustable output quality",
+      "Runs in your browser"
+    ],
+    "faqs": [
+      {
+        "question": "Which formats are supported?",
+        "answer": "Common web formats such as JPG, PNG, and WebP are supported. Other formats depend on browser capability."
+      },
+      {
+        "question": "Will transparency be preserved?",
+        "answer": "Yes for PNG and WebP. JPG has no transparency, so transparent areas are filled with a solid color."
+      }
+    ],
+    "seoTitle": "Image Converter – Convert JPG, PNG, WebP Online",
+    "metaDescription": "Convert images between JPG, PNG, and WebP formats. Fast, private, and free browser-based image conversion.",
+    "keywords": [
+      "image converter",
+      "convert image format",
+      "change image type",
+      "photo converter"
+    ],
+    "icon": "convert",
+    "toolType": "file-converter",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-015",
+    "slug": "png-to-jpg",
+    "name": "PNG to JPG",
+    "category": "image-tools",
+    "shortDescription": "Convert PNG images to smaller JPG files.",
+    "howToUse": "Upload one or more PNG files, pick a quality level and background color for transparent areas, then click Convert. Download your JPGs.",
+    "features": [
+      "Choose background for transparency",
+      "Quality control",
+      "Batch conversion",
+      "Private processing"
+    ],
+    "faqs": [
+      {
+        "question": "Why did my transparent background turn white?",
+        "answer": "JPG cannot store transparency, so transparent pixels are filled with a color. You can pick a different one."
+      },
+      {
+        "question": "Will the JPG be smaller?",
+        "answer": "Usually yes, especially for photographs, though flat graphics may not shrink much."
+      }
+    ],
+    "seoTitle": "PNG to JPG Converter – Free Online Tool",
+    "metaDescription": "Convert PNG to JPG in seconds. Pick quality and background color, and download smaller images privately in your browser.",
+    "keywords": [
+      "png to jpg",
+      "png to jpeg",
+      "convert png",
+      "png converter"
+    ],
+    "icon": "image-swap",
+    "toolType": "file-converter",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-016",
+    "slug": "jpg-to-png",
+    "name": "JPG to PNG",
+    "category": "image-tools",
+    "shortDescription": "Convert JPG images to lossless PNG files.",
+    "howToUse": "Upload JPG files and click Convert to PNG. Download each result. Converting does not restore detail already lost in the JPG.",
+    "features": [
+      "Lossless PNG output",
+      "Batch conversion",
+      "Keeps original dimensions",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Does converting to PNG improve quality?",
+        "answer": "No. It prevents further loss but cannot recover detail removed by earlier JPG compression."
+      },
+      {
+        "question": "Why is the PNG larger than the JPG?",
+        "answer": "PNG stores images without lossy compression, so photo files are often much bigger."
+      }
+    ],
+    "seoTitle": "JPG to PNG Converter – Convert JPEG to PNG",
+    "metaDescription": "Convert JPG images to PNG format online. Quick, private conversion in your browser with no sign-up needed.",
+    "keywords": [
+      "jpg to png",
+      "jpeg to png",
+      "convert jpg",
+      "jpg converter"
+    ],
+    "icon": "image-swap",
+    "toolType": "file-converter",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-017",
+    "slug": "webp-converter",
+    "name": "WebP Converter",
+    "category": "image-tools",
+    "shortDescription": "Convert images to and from the modern WebP format.",
+    "howToUse": "Upload an image, choose WebP or another target format, set quality, and convert. Download the new file for use on your website.",
+    "features": [
+      "Convert to and from WebP",
+      "Quality slider",
+      "Usually smaller than JPG or PNG",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Why use WebP?",
+        "answer": "WebP files are typically smaller than JPG or PNG at similar quality, which helps pages load faster."
+      },
+      {
+        "question": "Do all browsers support WebP?",
+        "answer": "All major modern browsers support it. Very old browsers and some older software may not."
+      }
+    ],
+    "seoTitle": "WebP Converter – Convert Images to WebP Online",
+    "metaDescription": "Convert JPG and PNG to WebP, or WebP back to common formats. Free, fast, and private in your browser.",
+    "keywords": [
+      "webp converter",
+      "jpg to webp",
+      "png to webp",
+      "webp to jpg"
+    ],
+    "icon": "image-swap",
+    "toolType": "file-converter",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-018",
+    "slug": "image-to-base64",
+    "name": "Image to Base64",
+    "category": "image-tools",
+    "shortDescription": "Encode an image as a Base64 string or data URI for use in code.",
+    "howToUse": "Upload an image and the Base64 output appears instantly. Copy the plain string or the full data URI for HTML and CSS.",
+    "features": [
+      "Plain Base64 and data URI output",
+      "One-click copy",
+      "Supports common image formats",
+      "Nothing leaves your browser"
+    ],
+    "faqs": [
+      {
+        "question": "When should I use Base64 images?",
+        "answer": "They suit small icons or inline assets. Large images become bulky, so regular files are usually better."
+      },
+      {
+        "question": "How much bigger is Base64?",
+        "answer": "Encoded data is roughly 33 percent larger than the original file."
+      }
+    ],
+    "seoTitle": "Image to Base64 Converter – Create Data URI",
+    "metaDescription": "Convert images to Base64 strings and data URIs for HTML, CSS, and email. Free browser-based encoder.",
+    "keywords": [
+      "image to base64",
+      "base64 image",
+      "data uri generator",
+      "encode image"
+    ],
+    "icon": "code",
+    "toolType": "file-converter",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-019",
+    "slug": "background-remover",
+    "name": "Background Remover",
+    "category": "image-tools",
+    "shortDescription": "Remove the background from a photo and export a transparent PNG.",
+    "howToUse": "Upload a photo, wait for the background to be detected and removed, then refine the edges if needed. Download as a transparent PNG.",
+    "features": [
+      "Automatic subject detection",
+      "Transparent PNG export",
+      "Works best on clear subjects",
+      "Needs an ML model or API to run"
+    ],
+    "faqs": [
+      {
+        "question": "How accurate is automatic background removal?",
+        "answer": "It works well on clear subjects with good contrast. Hair, glass, and busy scenes may need manual touch-ups."
+      },
+      {
+        "question": "Is my photo uploaded anywhere?",
+        "answer": "That depends on how the tool is deployed. See the processing note on this page for details."
+      }
+    ],
+    "seoTitle": "Background Remover – Remove Image Background",
+    "metaDescription": "Remove photo backgrounds and download a transparent PNG. Best for portraits, products, and clear subjects.",
+    "keywords": [
+      "remove background",
+      "background remover",
+      "transparent background",
+      "cut out image"
+    ],
+    "icon": "eraser",
+    "toolType": "file-processor",
+    "processing": "external-api",
+    "implementationNote": "Requires a real segmentation model (an in-browser ML library or a third-party API). Do not publish as functional until one is integrated."
+  },
+  {
+    "id": "tool-020",
+    "slug": "image-color-picker",
+    "name": "Image Color Picker",
+    "category": "image-tools",
+    "shortDescription": "Pick any color from an uploaded image and get its HEX, RGB, and HSL values.",
+    "howToUse": "Upload an image and click anywhere on it. The color code appears instantly and can be copied. Build a palette by picking several points.",
+    "features": [
+      "HEX, RGB, and HSL output",
+      "Magnifier for precise picking",
+      "Palette from multiple picks",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Are the colors exact?",
+        "answer": "They match the pixel you click. Compressed JPGs can contain slight color variations."
+      },
+      {
+        "question": "Can I save a palette?",
+        "answer": "Pick several colors and copy them together as a list."
+      }
+    ],
+    "seoTitle": "Image Color Picker – Get HEX, RGB from Photos",
+    "metaDescription": "Pick colors from any image and copy HEX, RGB, or HSL codes. Free, private, and runs in your browser.",
+    "keywords": [
+      "image color picker",
+      "pick color from image",
+      "hex from image",
+      "color extractor"
+    ],
+    "icon": "eyedropper",
+    "toolType": "utility",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-021",
+    "slug": "photo-editor",
+    "name": "Photo Editor",
+    "category": "photo-editing-tools",
+    "shortDescription": "Make quick edits to photos: crop, rotate, adjust light and color, and add text.",
+    "howToUse": "Upload a photo, choose an adjustment from the toolbar, and fine-tune with the sliders. Use Undo if you change your mind, then download the edited image.",
+    "features": [
+      "Crop, rotate, and flip",
+      "Light and color adjustments",
+      "Text overlay",
+      "Undo and reset"
+    ],
+    "faqs": [
+      {
+        "question": "Does editing damage my original photo?",
+        "answer": "No. Edits are applied to a copy, and your original file is untouched."
+      },
+      {
+        "question": "What formats can I export?",
+        "answer": "You can typically export JPG, PNG, or WebP."
+      }
+    ],
+    "seoTitle": "Free Online Photo Editor – Edit Images in Browser",
+    "metaDescription": "Edit photos online with crop, rotate, brightness, contrast, and text tools. Private and free, no software to install.",
+    "keywords": [
+      "photo editor",
+      "online photo editor",
+      "edit pictures",
+      "image editor"
+    ],
+    "icon": "edit",
+    "toolType": "file-processor",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-022",
+    "slug": "blur-photo",
+    "name": "Blur Photo",
+    "category": "photo-editing-tools",
+    "shortDescription": "Blur an entire photo or selected areas to hide details or soften a background.",
+    "howToUse": "Upload a photo, choose full or selected-area blur, set the strength, and paint or drag over the area. Download the result.",
+    "features": [
+      "Full or partial blur",
+      "Adjustable strength",
+      "Hide faces or text",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Is blur a safe way to hide sensitive text?",
+        "answer": "Light blur can sometimes be reversed. For private information, use a strong blur or cover it with a solid block."
+      },
+      {
+        "question": "Can I blur just the background?",
+        "answer": "You can blur selected areas manually. Automatic subject detection is not included."
+      }
+    ],
+    "seoTitle": "Blur Photo Online – Free Image Blur Tool",
+    "metaDescription": "Blur photos or specific areas with adjustable strength. Hide details or soften backgrounds privately in your browser.",
+    "keywords": [
+      "blur photo",
+      "blur image",
+      "blur background",
+      "blur face"
+    ],
+    "icon": "blur",
+    "toolType": "file-processor",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-023",
+    "slug": "photo-enhancer",
+    "name": "Photo Enhancer",
+    "category": "photo-editing-tools",
+    "shortDescription": "Improve a photo's contrast, sharpness, and color balance with one click.",
+    "howToUse": "Upload a photo and apply Auto Enhance, or adjust contrast, saturation, and sharpness manually. Compare before and after, then download.",
+    "features": [
+      "One-click auto enhance",
+      "Manual contrast, saturation, and sharpness",
+      "Before and after comparison",
+      "Browser-based processing"
+    ],
+    "faqs": [
+      {
+        "question": "Can this fix a very blurry photo?",
+        "answer": "It can improve mild softness, but it cannot recover detail that was never captured."
+      },
+      {
+        "question": "Is this AI upscaling?",
+        "answer": "No. It applies standard image adjustments, not AI-based upscaling."
+      }
+    ],
+    "seoTitle": "Photo Enhancer – Improve Image Quality Online",
+    "metaDescription": "Enhance photos with auto and manual adjustments for contrast, color, and sharpness. Free and private in your browser.",
+    "keywords": [
+      "photo enhancer",
+      "enhance photo",
+      "improve image quality",
+      "sharpen image"
+    ],
+    "icon": "sparkles",
+    "toolType": "file-processor",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-024",
+    "slug": "brightness-adjuster",
+    "name": "Brightness Adjuster",
+    "category": "photo-editing-tools",
+    "shortDescription": "Make a photo lighter or darker with a simple slider.",
+    "howToUse": "Upload a photo, drag the brightness slider until it looks right, and download the adjusted image. Contrast control is also available.",
+    "features": [
+      "Brightness and contrast sliders",
+      "Live preview",
+      "Quick reset",
+      "Runs in your browser"
+    ],
+    "faqs": [
+      {
+        "question": "How do I fix an underexposed photo?",
+        "answer": "Raise brightness gradually and add a little contrast to keep the image from looking flat."
+      },
+      {
+        "question": "Can I brighten only part of a photo?",
+        "answer": "This tool adjusts the whole image. Use the Photo Editor for localized changes."
+      }
+    ],
+    "seoTitle": "Brightness Adjuster – Lighten or Darken Photos",
+    "metaDescription": "Adjust photo brightness and contrast online. Live preview and instant download, free in your browser.",
+    "keywords": [
+      "adjust brightness",
+      "brighten photo",
+      "darken image",
+      "brightness tool"
+    ],
+    "icon": "sun",
+    "toolType": "file-processor",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-025",
+    "slug": "image-filters",
+    "name": "Image Filters",
+    "category": "photo-editing-tools",
+    "shortDescription": "Apply filters like grayscale, sepia, vintage, and more to your photos.",
+    "howToUse": "Upload an image, click a filter preset, and adjust its intensity. Download the filtered picture when you are happy with it.",
+    "features": [
+      "Grayscale, sepia, and vintage styles",
+      "Intensity control",
+      "Instant previews",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Can I combine filters?",
+        "answer": "Yes. Apply one, then add another, or fine-tune the intensity of each."
+      },
+      {
+        "question": "Will filters reduce image quality?",
+        "answer": "Exports keep the original resolution. Only the colors and tones change."
+      }
+    ],
+    "seoTitle": "Image Filters – Add Photo Effects Online",
+    "metaDescription": "Apply grayscale, sepia, and vintage filters to your photos. Free online filter tool that works in your browser.",
+    "keywords": [
+      "image filters",
+      "photo filters",
+      "sepia filter",
+      "black and white photo"
+    ],
+    "icon": "filter",
+    "toolType": "file-processor",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-026",
+    "slug": "photo-collage-maker",
+    "name": "Photo Collage Maker",
+    "category": "photo-editing-tools",
+    "shortDescription": "Arrange several photos into a collage using ready-made layouts.",
+    "howToUse": "Pick a layout, add your photos to each slot, adjust spacing and background color, and click Download to save the collage.",
+    "features": [
+      "Multiple layout templates",
+      "Adjustable spacing and borders",
+      "Custom background color",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "How many photos can I add?",
+        "answer": "Each layout has a set number of slots, typically 2 to 9 photos."
+      },
+      {
+        "question": "What size is the finished collage?",
+        "answer": "You can pick an output size suited to social media or printing."
+      }
+    ],
+    "seoTitle": "Photo Collage Maker – Create Collages Online",
+    "metaDescription": "Make photo collages with layouts, borders, and custom backgrounds. Free, private, and easy to use in your browser.",
+    "keywords": [
+      "photo collage maker",
+      "collage maker",
+      "picture collage",
+      "combine photos"
+    ],
+    "icon": "layout-grid",
+    "toolType": "generator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-027",
+    "slug": "passport-photo-maker",
+    "name": "Passport Photo Maker",
+    "category": "photo-editing-tools",
+    "shortDescription": "Crop a photo to common passport and ID sizes and prepare a printable sheet.",
+    "howToUse": "Upload a portrait, choose your country's photo size, align your face using the guides, and download a single photo or a print-ready sheet.",
+    "features": [
+      "Common passport and ID sizes",
+      "Face alignment guides",
+      "Print sheet layout",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Will my photo be accepted automatically?",
+        "answer": "Not guaranteed. Always check your country's official requirements for background, expression, and lighting."
+      },
+      {
+        "question": "Does it remove the background?",
+        "answer": "No. Use a plain, light background when taking the photo or edit it with a background tool."
+      }
+    ],
+    "seoTitle": "Passport Photo Maker – Crop ID Photos Online",
+    "metaDescription": "Crop photos to passport and ID sizes for the US, UK, Canada, and the EU. Create printable sheets privately in your browser.",
+    "keywords": [
+      "passport photo maker",
+      "id photo",
+      "passport size photo",
+      "visa photo"
+    ],
+    "icon": "id-card",
+    "toolType": "generator",
+    "processing": "browser",
+    "implementationNote": "Photo size presets must be verified against official government specifications before launch."
+  },
+  {
+    "id": "tool-028",
+    "slug": "meme-generator",
+    "name": "Meme Generator",
+    "category": "photo-editing-tools",
+    "shortDescription": "Add top and bottom captions to an image to create a meme.",
+    "howToUse": "Upload an image, type your text, adjust font size and color, then download the finished meme.",
+    "features": [
+      "Top and bottom captions",
+      "Font size and color options",
+      "Use your own images",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Can I use any image?",
+        "answer": "Use images you own or have permission to use. You are responsible for copyright compliance."
+      },
+      {
+        "question": "Which format is the meme saved in?",
+        "answer": "Memes download as PNG or JPG images."
+      }
+    ],
+    "seoTitle": "Meme Generator – Make Memes Online for Free",
+    "metaDescription": "Create memes with your own images and captions. Customize text and download instantly in your browser.",
+    "keywords": [
+      "meme generator",
+      "make a meme",
+      "meme maker",
+      "add text to image"
+    ],
+    "icon": "smile",
+    "toolType": "generator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-029",
+    "slug": "watermark-adder",
+    "name": "Watermark Adder",
+    "category": "photo-editing-tools",
+    "shortDescription": "Add a text or logo watermark to protect and brand your images.",
+    "howToUse": "Upload your images, add text or a logo, set position, size, and opacity, and download the watermarked files.",
+    "features": [
+      "Text and logo watermarks",
+      "Position, size, and opacity controls",
+      "Batch watermarking",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Can a watermark be removed by others?",
+        "answer": "A watermark discourages casual copying but cannot completely prevent removal."
+      },
+      {
+        "question": "Can I add my logo?",
+        "answer": "Yes. Upload a PNG with a transparent background for the cleanest result."
+      }
+    ],
+    "seoTitle": "Add Watermark to Photos – Free Watermark Tool",
+    "metaDescription": "Add text or logo watermarks to images. Control size, position, and opacity, and download privately in your browser.",
+    "keywords": [
+      "add watermark",
+      "watermark photo",
+      "watermark maker",
+      "logo on image"
+    ],
+    "icon": "stamp",
+    "toolType": "file-processor",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-030",
+    "slug": "photo-background-changer",
+    "name": "Photo Background Changer",
+    "category": "photo-editing-tools",
+    "shortDescription": "Replace a photo's background with a solid color or another image.",
+    "howToUse": "Upload a portrait, remove the existing background, then choose a new color or upload a replacement image. Download the finished photo.",
+    "features": [
+      "Solid color or image backgrounds",
+      "Edge refinement",
+      "Transparent PNG option",
+      "Needs a background removal engine"
+    ],
+    "faqs": [
+      {
+        "question": "Does this work on any photo?",
+        "answer": "It works best when the subject is clearly separated from the background."
+      },
+      {
+        "question": "Is the process automatic?",
+        "answer": "Automatic removal needs a segmentation model or API; see this tool's processing note."
+      }
+    ],
+    "seoTitle": "Photo Background Changer – Replace Image Backgrounds",
+    "metaDescription": "Change photo backgrounds to a new color or image. Great for profile pictures and product shots.",
+    "keywords": [
+      "change photo background",
+      "replace background",
+      "background changer",
+      "new photo background"
+    ],
+    "icon": "image-plus",
+    "toolType": "file-processor",
+    "processing": "external-api",
+    "implementationNote": "Depends on the same segmentation model or API as the Background Remover; do not mark functional until integrated."
+  },
+  {
+    "id": "tool-031",
+    "slug": "video-compressor",
+    "name": "Video Compressor",
+    "category": "video-tools",
+    "shortDescription": "Reduce a video's file size for easier sharing and uploading.",
+    "howToUse": "Upload a video, choose a quality or target size, and click Compress. Download the smaller file when processing completes. Large videos take longer.",
+    "features": [
+      "Quality and size presets",
+      "Keeps the original format where possible",
+      "Before and after file sizes",
+      "Runs locally using WebAssembly"
+    ],
+    "faqs": [
+      {
+        "question": "Will compression reduce video quality?",
+        "answer": "Some quality is traded for size. Moderate settings usually look close to the original."
+      },
+      {
+        "question": "Why is it slow on big files?",
+        "answer": "Processing happens on your device, so speed depends on its CPU and memory."
+      }
+    ],
+    "seoTitle": "Compress Video Online – Reduce Video File Size",
+    "metaDescription": "Shrink video files for email, messaging, and uploads. Choose a quality level and compress privately in your browser.",
+    "keywords": [
+      "compress video",
+      "video compressor",
+      "reduce video size",
+      "shrink mp4"
+    ],
+    "icon": "video-compress",
+    "toolType": "file-processor",
+    "processing": "browser",
+    "implementationNote": "Needs an in-browser FFmpeg (WebAssembly) build; browser memory limits apply to large files."
+  },
+  {
+    "id": "tool-032",
+    "slug": "video-trimmer",
+    "name": "Video Trimmer",
+    "category": "video-tools",
+    "shortDescription": "Cut a video to keep only the part you want.",
+    "howToUse": "Upload a video, drag the start and end handles on the timeline, preview the selection, and click Trim. Download the shortened clip.",
+    "features": [
+      "Timeline handles with preview",
+      "Frame-accurate start and end inputs",
+      "Fast stream-copy trimming where possible",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Does trimming re-encode the video?",
+        "answer": "When possible it copies the video stream, which is fast and keeps quality. Otherwise it re-encodes."
+      },
+      {
+        "question": "Can I remove a section from the middle?",
+        "answer": "This tool keeps one selected segment. Trim twice and merge to remove a middle part."
+      }
+    ],
+    "seoTitle": "Video Trimmer – Cut Videos Online for Free",
+    "metaDescription": "Trim videos by setting start and end points. Preview your clip and download it quickly in your browser.",
+    "keywords": [
+      "trim video",
+      "video cutter",
+      "cut video online",
+      "video trimmer"
+    ],
+    "icon": "scissors",
+    "toolType": "file-processor",
+    "processing": "browser",
+    "implementationNote": "Needs in-browser FFmpeg (WebAssembly)."
+  },
+  {
+    "id": "tool-033",
+    "slug": "video-cropper",
+    "name": "Video Cropper",
+    "category": "video-tools",
+    "shortDescription": "Crop the frame of a video to a new size or aspect ratio.",
+    "howToUse": "Upload a video, drag the crop box or choose a ratio like 9:16, and click Crop. Download the new video.",
+    "features": [
+      "Free-form and preset ratios",
+      "Live crop preview",
+      "Great for vertical social videos",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Is this the same as trimming?",
+        "answer": "No. Cropping changes the visible frame area; trimming changes the length."
+      },
+      {
+        "question": "Does cropping lower quality?",
+        "answer": "The video is re-encoded, so a small quality change is possible."
+      }
+    ],
+    "seoTitle": "Crop Video Online – Free Video Cropper",
+    "metaDescription": "Crop videos to any size or aspect ratio, such as 9:16 or 1:1. Preview and download in your browser.",
+    "keywords": [
+      "crop video",
+      "video cropper",
+      "change video aspect ratio",
+      "vertical video"
+    ],
+    "icon": "crop",
+    "toolType": "file-processor",
+    "processing": "browser",
+    "implementationNote": "Needs in-browser FFmpeg (WebAssembly)."
+  },
+  {
+    "id": "tool-034",
+    "slug": "video-to-gif",
+    "name": "Video to GIF",
+    "category": "video-tools",
+    "shortDescription": "Convert a short video clip into an animated GIF.",
+    "howToUse": "Upload a video, select the start and end time, choose size and frame rate, and click Convert. Download your GIF.",
+    "features": [
+      "Choose clip length and frame rate",
+      "Resize output",
+      "Optimized GIF palette",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Why is my GIF so large?",
+        "answer": "GIFs are inefficient. Shorter clips, smaller sizes, and lower frame rates reduce file size."
+      },
+      {
+        "question": "What clip length works best?",
+        "answer": "Under 10 seconds usually gives a manageable size."
+      }
+    ],
+    "seoTitle": "Video to GIF Converter – Make GIFs Online",
+    "metaDescription": "Turn video clips into animated GIFs. Set length, size, and frame rate, and convert privately in your browser.",
+    "keywords": [
+      "video to gif",
+      "make gif",
+      "mp4 to gif",
+      "gif maker"
+    ],
+    "icon": "film",
+    "toolType": "file-converter",
+    "processing": "browser",
+    "implementationNote": "Needs in-browser FFmpeg (WebAssembly)."
+  },
+  {
+    "id": "tool-035",
+    "slug": "gif-to-video",
+    "name": "GIF to Video",
+    "category": "video-tools",
+    "shortDescription": "Convert an animated GIF into a smaller MP4 or WebM video.",
+    "howToUse": "Upload a GIF, choose MP4 or WebM, and click Convert. Download the video, which is usually much smaller than the GIF.",
+    "features": [
+      "MP4 and WebM output",
+      "Much smaller than GIF",
+      "Keeps animation timing",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Why convert a GIF to video?",
+        "answer": "Video files are far smaller and load faster than GIFs with the same animation."
+      },
+      {
+        "question": "Will the video have sound?",
+        "answer": "No. GIFs do not contain audio."
+      }
+    ],
+    "seoTitle": "GIF to Video Converter – GIF to MP4 Online",
+    "metaDescription": "Convert GIFs to MP4 or WebM for smaller files and faster loading. Free and private in your browser.",
+    "keywords": [
+      "gif to mp4",
+      "gif to video",
+      "convert gif",
+      "gif to webm"
+    ],
+    "icon": "film",
+    "toolType": "file-converter",
+    "processing": "browser",
+    "implementationNote": "Needs in-browser FFmpeg (WebAssembly)."
+  },
+  {
+    "id": "tool-036",
+    "slug": "video-converter",
+    "name": "Video Converter",
+    "category": "video-tools",
+    "shortDescription": "Convert videos between MP4, WebM, MOV, and other formats.",
+    "howToUse": "Upload a video, choose the output format, and click Convert. Download the converted file when it is ready.",
+    "features": [
+      "Popular format support",
+      "Quality presets",
+      "Keeps resolution by default",
+      "Local WebAssembly processing"
+    ],
+    "faqs": [
+      {
+        "question": "Which format works on most devices?",
+        "answer": "MP4 with H.264 video is the most widely compatible."
+      },
+      {
+        "question": "Is there a file size limit?",
+        "answer": "Browser memory sets a practical limit. Very large files may need a desktop tool."
+      }
+    ],
+    "seoTitle": "Video Converter – Convert MP4, WebM, MOV Online",
+    "metaDescription": "Convert videos between popular formats like MP4 and WebM. Choose quality and convert in your browser.",
+    "keywords": [
+      "video converter",
+      "convert video",
+      "mov to mp4",
+      "mp4 converter"
+    ],
+    "icon": "video",
+    "toolType": "file-converter",
+    "processing": "browser",
+    "implementationNote": "Needs in-browser FFmpeg (WebAssembly); some codecs may be unavailable in the WASM build."
+  },
+  {
+    "id": "tool-037",
+    "slug": "video-resizer",
+    "name": "Video Resizer",
+    "category": "video-tools",
+    "shortDescription": "Change a video's resolution for different screens and platforms.",
+    "howToUse": "Upload a video, pick a preset like 1080p, 720p, or 480p, or enter custom dimensions, and click Resize. Download the result.",
+    "features": [
+      "Resolution presets",
+      "Custom dimensions",
+      "Aspect ratio lock",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Does lowering resolution reduce file size?",
+        "answer": "Yes. Fewer pixels generally means a smaller file."
+      },
+      {
+        "question": "Can I upscale a low-resolution video?",
+        "answer": "You can enlarge it, but it will not gain real detail."
+      }
+    ],
+    "seoTitle": "Video Resizer – Change Video Resolution Online",
+    "metaDescription": "Resize videos to 1080p, 720p, or custom dimensions. Free, private, and runs in your browser.",
+    "keywords": [
+      "resize video",
+      "video resolution changer",
+      "change video size",
+      "video resizer"
+    ],
+    "icon": "maximize",
+    "toolType": "file-processor",
+    "processing": "browser",
+    "implementationNote": "Needs in-browser FFmpeg (WebAssembly)."
+  },
+  {
+    "id": "tool-038",
+    "slug": "audio-extractor",
+    "name": "Audio Extractor",
+    "category": "video-tools",
+    "shortDescription": "Pull the audio track from a video and save it as MP3 or WAV.",
+    "howToUse": "Upload a video, choose MP3 or WAV, and click Extract. Download the audio file.",
+    "features": [
+      "MP3 and WAV output",
+      "Keeps full audio length",
+      "Adjustable bitrate",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Does extracting audio change the video?",
+        "answer": "No. Your original video stays the same."
+      },
+      {
+        "question": "What if the video has no audio?",
+        "answer": "The tool will tell you no audio track was found."
+      }
+    ],
+    "seoTitle": "Audio Extractor – Extract Audio from Video",
+    "metaDescription": "Extract audio from video files and save as MP3 or WAV. Free and private conversion in your browser.",
+    "keywords": [
+      "extract audio",
+      "video to mp3",
+      "audio extractor",
+      "mp4 to mp3"
+    ],
+    "icon": "music",
+    "toolType": "file-converter",
+    "processing": "browser",
+    "implementationNote": "MP3 encoding in the browser needs an FFmpeg WASM build that includes an MP3 encoder."
+  },
+  {
+    "id": "tool-039",
+    "slug": "video-speed-changer",
+    "name": "Video Speed Changer",
+    "category": "video-tools",
+    "shortDescription": "Speed up or slow down a video from 0.25x to 4x.",
+    "howToUse": "Upload a video, select a speed multiplier, choose whether to keep audio pitch, and click Apply. Download the adjusted video.",
+    "features": [
+      "0.25x to 4x speed range",
+      "Optional audio pitch correction",
+      "Live preview",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Will the audio change?",
+        "answer": "Audio speeds up or slows down too, and you can choose to preserve pitch."
+      },
+      {
+        "question": "Can I change speed for only part of a video?",
+        "answer": "This tool applies one speed to the whole clip. Trim first for partial changes."
+      }
+    ],
+    "seoTitle": "Video Speed Changer – Speed Up or Slow Down Video",
+    "metaDescription": "Change video speed from 0.25x to 4x. Make slow motion or timelapse clips privately in your browser.",
+    "keywords": [
+      "change video speed",
+      "slow motion video",
+      "speed up video",
+      "video speed"
+    ],
+    "icon": "gauge",
+    "toolType": "file-processor",
+    "processing": "browser",
+    "implementationNote": "Needs in-browser FFmpeg (WebAssembly)."
+  },
+  {
+    "id": "tool-040",
+    "slug": "video-thumbnail-maker",
+    "name": "Video Thumbnail Maker",
+    "category": "video-tools",
+    "shortDescription": "Capture a frame from a video and save it as a thumbnail image.",
+    "howToUse": "Upload a video, scrub to the frame you want, and click Capture. Download the frame as JPG or PNG.",
+    "features": [
+      "Frame-by-frame scrubbing",
+      "JPG and PNG export",
+      "Keeps original resolution",
+      "Uses the browser's built-in video player"
+    ],
+    "faqs": [
+      {
+        "question": "Can I use the thumbnail on YouTube?",
+        "answer": "Yes, as long as it meets the platform's size and file limits."
+      },
+      {
+        "question": "Does it add text or effects?",
+        "answer": "No. It captures a frame only. Use the Photo Editor to add text."
+      }
+    ],
+    "seoTitle": "Video Thumbnail Maker – Capture Video Frames",
+    "metaDescription": "Capture any frame from a video as a JPG or PNG thumbnail. Free, instant, and private in your browser.",
+    "keywords": [
+      "video thumbnail",
+      "capture video frame",
+      "thumbnail maker",
+      "video screenshot"
+    ],
+    "icon": "image",
+    "toolType": "generator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-041",
+    "slug": "word-counter",
+    "name": "Word Counter",
+    "category": "text-writing-tools",
+    "shortDescription": "Count words, characters, sentences, and paragraphs as you type.",
+    "howToUse": "Type or paste your text into the box. Counts update instantly. Reading and speaking time estimates appear alongside.",
+    "features": [
+      "Live word and sentence counts",
+      "Reading and speaking time",
+      "Paragraph count",
+      "Works entirely in your browser"
+    ],
+    "faqs": [
+      {
+        "question": "How does it count words?",
+        "answer": "Words are groups of characters separated by spaces or line breaks."
+      },
+      {
+        "question": "Is my text saved?",
+        "answer": "No. Your text stays in your browser and is not sent anywhere."
+      }
+    ],
+    "seoTitle": "Word Counter – Count Words and Characters Online",
+    "metaDescription": "Count words, characters, sentences, and paragraphs instantly. See reading time too. Free and private in your browser.",
+    "keywords": [
+      "word counter",
+      "count words",
+      "word count tool",
+      "essay word count"
+    ],
+    "icon": "hash",
+    "toolType": "text-utility",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-042",
+    "slug": "character-counter",
+    "name": "Character Counter",
+    "category": "text-writing-tools",
+    "shortDescription": "Count characters with and without spaces for limits like tweets and meta tags.",
+    "howToUse": "Paste your text to see character counts update instantly. Compare against common limits for social posts and SEO fields.",
+    "features": [
+      "With and without spaces",
+      "Common platform limits",
+      "Live updates",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Do spaces count as characters?",
+        "answer": "Most platforms count them. This tool shows both totals so you can check either way."
+      },
+      {
+        "question": "Are emojis counted correctly?",
+        "answer": "Emojis may count as more than one character on some platforms, so confirm with the platform's own counter."
+      }
+    ],
+    "seoTitle": "Character Counter – Count Characters Online",
+    "metaDescription": "Count characters with and without spaces. Check limits for social posts, meta descriptions, and more.",
+    "keywords": [
+      "character counter",
+      "count characters",
+      "character count",
+      "letter counter"
+    ],
+    "icon": "type",
+    "toolType": "text-utility",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-043",
+    "slug": "case-converter",
+    "name": "Case Converter",
+    "category": "text-writing-tools",
+    "shortDescription": "Switch text between uppercase, lowercase, title case, sentence case, and more.",
+    "howToUse": "Paste your text, click the case style you want, and copy the result.",
+    "features": [
+      "Upper, lower, title, and sentence case",
+      "camelCase and snake_case options",
+      "One-click copy",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "What is title case?",
+        "answer": "Title case capitalizes the main words in a heading while leaving small words like 'and' in lowercase."
+      },
+      {
+        "question": "Will it fix capitalization of names?",
+        "answer": "It applies simple rules, so proper nouns may need manual correction."
+      }
+    ],
+    "seoTitle": "Case Converter – Change Text Case Online",
+    "metaDescription": "Convert text to uppercase, lowercase, title case, sentence case, and more. Free and instant in your browser.",
+    "keywords": [
+      "case converter",
+      "uppercase to lowercase",
+      "title case converter",
+      "change text case"
+    ],
+    "icon": "case-sensitive",
+    "toolType": "text-utility",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-044",
+    "slug": "remove-duplicate-lines",
+    "name": "Remove Duplicate Lines",
+    "category": "text-writing-tools",
+    "shortDescription": "Delete repeated lines from a list or block of text.",
+    "howToUse": "Paste your text with one item per line, choose whether to ignore case or trim spaces, and click Remove Duplicates. Copy the cleaned list.",
+    "features": [
+      "Case-sensitive or insensitive",
+      "Trim whitespace option",
+      "Optional sorting",
+      "Shows how many lines were removed"
+    ],
+    "faqs": [
+      {
+        "question": "Does it keep the original order?",
+        "answer": "Yes by default. You can also choose to sort the results."
+      },
+      {
+        "question": "Can it remove duplicates across large lists?",
+        "answer": "Yes, up to what your browser can handle, typically many thousands of lines."
+      }
+    ],
+    "seoTitle": "Remove Duplicate Lines – Clean Text Lists Online",
+    "metaDescription": "Remove duplicate lines from lists instantly. Ignore case, trim spaces, and copy the clean results.",
+    "keywords": [
+      "remove duplicate lines",
+      "deduplicate list",
+      "unique lines",
+      "remove duplicates text"
+    ],
+    "icon": "list-minus",
+    "toolType": "text-utility",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-045",
+    "slug": "text-reverser",
+    "name": "Text Reverser",
+    "category": "text-writing-tools",
+    "shortDescription": "Reverse text by characters, words, or lines.",
+    "howToUse": "Enter your text, pick a reverse mode, and copy the output.",
+    "features": [
+      "Reverse characters, words, or lines",
+      "Instant results",
+      "One-click copy",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "What is the difference between reversing words and characters?",
+        "answer": "Reversing characters flips every letter, while reversing words keeps each word intact but flips their order."
+      },
+      {
+        "question": "Does it work with emojis?",
+        "answer": "Complex emojis may break when reversed by character."
+      }
+    ],
+    "seoTitle": "Text Reverser – Reverse Text Online",
+    "metaDescription": "Reverse text by character, word, or line order. Quick, free, and runs in your browser.",
+    "keywords": [
+      "reverse text",
+      "text reverser",
+      "reverse words",
+      "flip text"
+    ],
+    "icon": "repeat",
+    "toolType": "text-utility",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-046",
+    "slug": "grammar-checker",
+    "name": "Grammar Checker",
+    "category": "text-writing-tools",
+    "shortDescription": "Check text for common spelling and grammar issues.",
+    "howToUse": "Paste your text and click Check. Suggested fixes are highlighted. Accept or ignore each suggestion before copying the result.",
+    "features": [
+      "Spelling and grammar suggestions",
+      "Inline highlights",
+      "Copy corrected text",
+      "Requires a grammar engine or API"
+    ],
+    "faqs": [
+      {
+        "question": "Can it catch every mistake?",
+        "answer": "No automatic checker is perfect. Always proofread important writing yourself."
+      },
+      {
+        "question": "Is my text sent to a server?",
+        "answer": "If the tool uses an external checking service, your text is sent to it. See the processing note."
+      }
+    ],
+    "seoTitle": "Grammar Checker – Check Spelling and Grammar",
+    "metaDescription": "Check your writing for grammar and spelling mistakes. Review suggestions and copy corrected text.",
+    "keywords": [
+      "grammar checker",
+      "spell check",
+      "proofread online",
+      "grammar check"
+    ],
+    "icon": "spell-check",
+    "toolType": "text-utility",
+    "processing": "external-api",
+    "implementationNote": "Needs a real grammar engine (for example a self-hosted LanguageTool server or a third-party API). It is not AI unless an AI service is integrated."
+  },
+  {
+    "id": "tool-047",
+    "slug": "lorem-ipsum-generator",
+    "name": "Lorem Ipsum Generator",
+    "category": "text-writing-tools",
+    "shortDescription": "Generate placeholder text for designs and mockups.",
+    "howToUse": "Choose paragraphs, sentences, or words, set the amount, and click Generate. Copy the text into your project.",
+    "features": [
+      "Paragraphs, sentences, or words",
+      "Option to start with 'Lorem ipsum'",
+      "Instant copy",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "What is Lorem Ipsum?",
+        "answer": "It is placeholder text used in design and publishing to show how a layout looks with real-length content."
+      },
+      {
+        "question": "Is it real Latin?",
+        "answer": "It is scrambled text derived from a classical Latin passage and has no readable meaning."
+      }
+    ],
+    "seoTitle": "Lorem Ipsum Generator – Placeholder Text Online",
+    "metaDescription": "Generate lorem ipsum paragraphs, sentences, or words for mockups and designs. Free and instant.",
+    "keywords": [
+      "lorem ipsum",
+      "placeholder text",
+      "dummy text generator",
+      "lipsum"
+    ],
+    "icon": "align-left",
+    "toolType": "generator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-048",
+    "slug": "text-to-speech",
+    "name": "Text to Speech",
+    "category": "text-writing-tools",
+    "shortDescription": "Listen to written text read aloud in a synthetic voice.",
+    "howToUse": "Paste your text, choose a voice, language, and speed, and click Play. Voices available depend on your device and browser.",
+    "features": [
+      "Multiple voices and languages",
+      "Speed and pitch control",
+      "Uses your browser's speech engine",
+      "No audio download unless a TTS service is added"
+    ],
+    "faqs": [
+      {
+        "question": "Why do voices sound different on my phone?",
+        "answer": "The tool uses voices built into your device and browser, which vary by system."
+      },
+      {
+        "question": "Can I download the audio?",
+        "answer": "The built-in browser speech engine only plays audio. Downloads need a separate TTS service."
+      }
+    ],
+    "seoTitle": "Text to Speech – Read Text Aloud Online",
+    "metaDescription": "Turn text into spoken audio with adjustable voice, language, and speed. Free in your browser.",
+    "keywords": [
+      "text to speech",
+      "read text aloud",
+      "tts online",
+      "speech synthesis"
+    ],
+    "icon": "volume",
+    "toolType": "text-utility",
+    "processing": "browser",
+    "implementationNote": "Uses the Web Speech API (speechSynthesis); audio export is not supported without an external service."
+  },
+  {
+    "id": "tool-049",
+    "slug": "speech-to-text",
+    "name": "Speech to Text",
+    "category": "text-writing-tools",
+    "shortDescription": "Dictate with your microphone and see your words appear as text.",
+    "howToUse": "Click Start, allow microphone access, and speak clearly. Your words appear on screen. Stop when finished and copy the text.",
+    "features": [
+      "Live dictation",
+      "Multiple languages",
+      "Copy or clear text",
+      "Depends on browser speech recognition"
+    ],
+    "faqs": [
+      {
+        "question": "Which browsers support it?",
+        "answer": "Support varies. Chrome and Edge work well, while others may be limited or unsupported."
+      },
+      {
+        "question": "Is my voice sent to a server?",
+        "answer": "In some browsers the speech recognition service sends audio to the browser vendor's servers."
+      }
+    ],
+    "seoTitle": "Speech to Text – Free Voice Dictation Online",
+    "metaDescription": "Convert your speech to text with your microphone. Multiple languages supported in compatible browsers.",
+    "keywords": [
+      "speech to text",
+      "voice to text",
+      "dictation online",
+      "voice typing"
+    ],
+    "icon": "mic",
+    "toolType": "text-utility",
+    "processing": "external-api",
+    "implementationNote": "Uses the browser's SpeechRecognition API, which relies on the browser vendor's cloud service and is unavailable in some browsers."
+  },
+  {
+    "id": "tool-050",
+    "slug": "paragraph-generator",
+    "name": "Paragraph Generator",
+    "category": "text-writing-tools",
+    "shortDescription": "Generate sample paragraphs of readable text for drafts and layouts.",
+    "howToUse": "Choose how many paragraphs and sentences per paragraph you need, then click Generate. Copy the text.",
+    "features": [
+      "Control paragraph and sentence count",
+      "Readable placeholder sentences",
+      "Instant copy",
+      "Template-based, not AI-written"
+    ],
+    "faqs": [
+      {
+        "question": "Is the text written by AI?",
+        "answer": "No. It is assembled from sentence templates and word lists, so it is meant for placeholders only."
+      },
+      {
+        "question": "Can I use it for real articles?",
+        "answer": "It is not suited to publishing. Use it only for layout and testing."
+      }
+    ],
+    "seoTitle": "Paragraph Generator – Random Text Paragraphs",
+    "metaDescription": "Generate random readable paragraphs for mockups and testing. Free, instant, and no sign-up.",
+    "keywords": [
+      "paragraph generator",
+      "random paragraph",
+      "sample text",
+      "text generator"
+    ],
+    "icon": "pilcrow",
+    "toolType": "generator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-051",
+    "slug": "meta-tag-generator",
+    "name": "Meta Tag Generator",
+    "category": "seo-tools",
+    "shortDescription": "Create title, description, and viewport meta tags for your web pages.",
+    "howToUse": "Enter your page title, description, and optional keywords, language, and robots settings. Copy the generated HTML into your page's head section.",
+    "features": [
+      "Title and description tags",
+      "Robots and viewport options",
+      "Character length guidance",
+      "Copy-ready HTML"
+    ],
+    "faqs": [
+      {
+        "question": "How long should a meta description be?",
+        "answer": "Aim for roughly 120 to 160 characters so it is less likely to be cut off in search results."
+      },
+      {
+        "question": "Do meta keywords help rankings?",
+        "answer": "Google does not use the meta keywords tag, so it is optional."
+      }
+    ],
+    "seoTitle": "Meta Tag Generator – Create SEO Meta Tags",
+    "metaDescription": "Generate SEO-friendly meta tags for your pages. Add title, description, and robots tags and copy the HTML.",
+    "keywords": [
+      "meta tag generator",
+      "seo meta tags",
+      "meta description generator",
+      "html meta tags"
+    ],
+    "icon": "tags",
+    "toolType": "generator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-052",
+    "slug": "meta-tag-analyzer",
+    "name": "Meta Tag Analyzer",
+    "category": "seo-tools",
+    "shortDescription": "Check the meta tags of a page and spot common SEO issues.",
+    "howToUse": "Paste your page's HTML head code or a URL, and click Analyze. Review the title, description, and robots tags with suggestions.",
+    "features": [
+      "Title and description length checks",
+      "Robots and canonical detection",
+      "Open Graph overview",
+      "URL fetching needs a server"
+    ],
+    "faqs": [
+      {
+        "question": "Can it analyze any URL?",
+        "answer": "Fetching a live URL needs a server-side request because browsers block cross-site fetching. Pasting HTML always works."
+      },
+      {
+        "question": "What makes a good title tag?",
+        "answer": "A clear, unique title that describes the page, usually under about 60 characters."
+      }
+    ],
+    "seoTitle": "Meta Tag Analyzer – Check Page SEO Tags",
+    "metaDescription": "Analyze title, description, and robots meta tags with clear recommendations. Paste HTML or enter a URL.",
+    "keywords": [
+      "meta tag analyzer",
+      "meta tag checker",
+      "seo tag checker",
+      "analyze meta tags"
+    ],
+    "icon": "search",
+    "toolType": "checker",
+    "processing": "server",
+    "implementationNote": "Pasted-HTML analysis runs in the browser; URL analysis needs a server-side fetch (watch SSRF protections and rate limits)."
+  },
+  {
+    "id": "tool-053",
+    "slug": "keyword-density-checker",
+    "name": "Keyword Density Checker",
+    "category": "seo-tools",
+    "shortDescription": "See how often each word and phrase appears in your content.",
+    "howToUse": "Paste your text and click Check. A table shows word counts and percentages for single words and phrases.",
+    "features": [
+      "Single words and phrases",
+      "Percentage frequency",
+      "Stop-word filtering",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "What is a good keyword density?",
+        "answer": "There is no ideal number. Write naturally and avoid repeating a phrase just to hit a target."
+      },
+      {
+        "question": "Does it ignore common words like 'the'?",
+        "answer": "Yes, you can filter out common stop words."
+      }
+    ],
+    "seoTitle": "Keyword Density Checker – Analyze Text Keywords",
+    "metaDescription": "Check word and phrase frequency in your content. Spot overuse and improve readability. Free and private.",
+    "keywords": [
+      "keyword density",
+      "keyword checker",
+      "word frequency",
+      "seo content analysis"
+    ],
+    "icon": "bar-chart",
+    "toolType": "checker",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-054",
+    "slug": "sitemap-generator",
+    "name": "Sitemap Generator",
+    "category": "seo-tools",
+    "shortDescription": "Create an XML sitemap file from a list of URLs.",
+    "howToUse": "Paste your URLs one per line, set optional priority and change frequency, and click Generate. Download or copy the sitemap.xml file.",
+    "features": [
+      "Valid XML sitemap output",
+      "Optional lastmod, priority, and frequency",
+      "Download as sitemap.xml",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Does this crawl my website?",
+        "answer": "No. It builds a sitemap from the URLs you provide. Automatic crawling needs a server."
+      },
+      {
+        "question": "Where do I upload the sitemap?",
+        "answer": "Place it at the root of your site and submit it in Google Search Console."
+      }
+    ],
+    "seoTitle": "XML Sitemap Generator – Create sitemap.xml",
+    "metaDescription": "Generate a valid XML sitemap from your URLs. Download sitemap.xml and submit it to search engines.",
+    "keywords": [
+      "sitemap generator",
+      "xml sitemap",
+      "create sitemap",
+      "sitemap.xml"
+    ],
+    "icon": "sitemap",
+    "toolType": "generator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-055",
+    "slug": "robots-txt-generator",
+    "name": "Robots.txt Generator",
+    "category": "seo-tools",
+    "shortDescription": "Build a robots.txt file to guide search engine crawlers.",
+    "howToUse": "Choose which paths to allow or block, add your sitemap URL, and click Generate. Copy or download robots.txt and upload it to your site's root.",
+    "features": [
+      "Allow and disallow rules",
+      "Sitemap line support",
+      "Preset templates",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Does robots.txt hide pages from Google?",
+        "answer": "Not reliably. It asks crawlers not to crawl a page. Use a noindex tag to keep pages out of search results."
+      },
+      {
+        "question": "Where does robots.txt go?",
+        "answer": "It must be at the root of your domain, such as example.com/robots.txt."
+      }
+    ],
+    "seoTitle": "Robots.txt Generator – Create robots.txt Online",
+    "metaDescription": "Create a robots.txt file with allow and disallow rules and your sitemap link. Free and easy to use.",
+    "keywords": [
+      "robots.txt generator",
+      "create robots.txt",
+      "robots file",
+      "block crawlers"
+    ],
+    "icon": "bot",
+    "toolType": "generator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-056",
+    "slug": "slug-generator",
+    "name": "Slug Generator",
+    "category": "seo-tools",
+    "shortDescription": "Turn titles into clean, URL-friendly slugs.",
+    "howToUse": "Type or paste a title. The slug appears instantly with lowercase letters and hyphens. Choose whether to remove stop words.",
+    "features": [
+      "Lowercase, hyphenated output",
+      "Special character and accent handling",
+      "Optional stop-word removal",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "What makes a good URL slug?",
+        "answer": "Short, descriptive, lowercase, and separated by hyphens."
+      },
+      {
+        "question": "Does it handle accents?",
+        "answer": "Yes. Accented letters like é and ü are converted to plain letters."
+      }
+    ],
+    "seoTitle": "Slug Generator – Create SEO-Friendly URLs",
+    "metaDescription": "Convert titles to clean URL slugs. Handles accents and special characters. Free and instant.",
+    "keywords": [
+      "slug generator",
+      "url slug",
+      "seo friendly url",
+      "permalink generator"
+    ],
+    "icon": "link",
+    "toolType": "generator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-057",
+    "slug": "serp-snippet-preview",
+    "name": "SERP Snippet Preview",
+    "category": "seo-tools",
+    "shortDescription": "Preview how your title and description may appear in Google results.",
+    "howToUse": "Enter your title, URL, and meta description. The preview shows desktop and mobile snippets and warns when text may be truncated.",
+    "features": [
+      "Desktop and mobile previews",
+      "Truncation warnings",
+      "Pixel-width estimation",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Is the preview exactly what Google shows?",
+        "answer": "No. Google may rewrite titles and descriptions, so treat it as an estimate."
+      },
+      {
+        "question": "Why is my title cut off?",
+        "answer": "Search results truncate titles by pixel width, usually around 580 to 600 pixels."
+      }
+    ],
+    "seoTitle": "SERP Snippet Preview Tool – Google Result Preview",
+    "metaDescription": "Preview your title and meta description as they might appear in Google search results on desktop and mobile.",
+    "keywords": [
+      "serp preview",
+      "google snippet preview",
+      "title preview",
+      "meta description preview"
+    ],
+    "icon": "eye",
+    "toolType": "checker",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-058",
+    "slug": "xml-formatter",
+    "name": "XML Formatter",
+    "category": "seo-tools",
+    "shortDescription": "Format, indent, and validate XML so it is easy to read.",
+    "howToUse": "Paste your XML, choose an indent size, and click Format. Errors are flagged with a helpful message. Copy the cleaned output.",
+    "features": [
+      "Pretty-print with custom indent",
+      "Well-formedness validation",
+      "Minify option",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Does it validate against a schema?",
+        "answer": "It checks that XML is well-formed. Validation against XSD schemas is not included."
+      },
+      {
+        "question": "Can it handle large files?",
+        "answer": "Yes, within your browser's memory limits."
+      }
+    ],
+    "seoTitle": "XML Formatter – Format and Validate XML Online",
+    "metaDescription": "Beautify, minify, and validate XML online. Clear error messages and instant copy in your browser.",
+    "keywords": [
+      "xml formatter",
+      "xml beautifier",
+      "format xml",
+      "xml validator"
+    ],
+    "icon": "code-xml",
+    "toolType": "text-utility",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-059",
+    "slug": "schema-markup-generator",
+    "name": "Schema Markup Generator",
+    "category": "seo-tools",
+    "shortDescription": "Generate JSON-LD structured data for articles, products, FAQs, and more.",
+    "howToUse": "Choose a schema type, fill in the fields, and copy the JSON-LD into your page. Test the result with Google's Rich Results Test.",
+    "features": [
+      "JSON-LD output",
+      "Article, product, FAQ, and organization types",
+      "Required field hints",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Does schema markup improve rankings?",
+        "answer": "It does not directly boost rankings but can make you eligible for rich results."
+      },
+      {
+        "question": "How do I test it?",
+        "answer": "Use Google's Rich Results Test or the Schema Markup Validator."
+      }
+    ],
+    "seoTitle": "Schema Markup Generator – Create JSON-LD Online",
+    "metaDescription": "Create JSON-LD structured data for articles, products, FAQs, and organizations. Copy and paste into your site.",
+    "keywords": [
+      "schema markup generator",
+      "json-ld generator",
+      "structured data",
+      "faq schema"
+    ],
+    "icon": "braces",
+    "toolType": "generator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-060",
+    "slug": "open-graph-preview",
+    "name": "Open Graph Preview",
+    "category": "seo-tools",
+    "shortDescription": "Preview how a link looks when shared on social platforms.",
+    "howToUse": "Enter your Open Graph title, description, image URL, and page URL. See sample cards for popular social platforms and copy the tags.",
+    "features": [
+      "Social card previews",
+      "Open Graph and Twitter Card tags",
+      "Image size guidance",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "What image size works best?",
+        "answer": "About 1200 by 630 pixels is widely recommended for link previews."
+      },
+      {
+        "question": "Why does a platform show an old preview?",
+        "answer": "Platforms cache previews. Use their sharing debugger to refresh it."
+      }
+    ],
+    "seoTitle": "Open Graph Preview – Social Share Card Checker",
+    "metaDescription": "Preview Open Graph and Twitter Card links before you share. Generate tags and fix social previews.",
+    "keywords": [
+      "open graph preview",
+      "og tags",
+      "social share preview",
+      "twitter card"
+    ],
+    "icon": "share",
+    "toolType": "checker",
+    "processing": "browser",
+    "implementationNote": "Live URL fetching would need a server; this version previews values you enter."
+  },
+  {
+    "id": "tool-061",
+    "slug": "json-formatter",
+    "name": "JSON Formatter",
+    "category": "developer-tools",
+    "shortDescription": "Format and beautify JSON for easier reading and debugging.",
+    "howToUse": "Paste your JSON, choose indentation, and click Format. Syntax errors are highlighted. Copy the formatted result.",
+    "features": [
+      "Pretty-print and minify",
+      "Adjustable indentation",
+      "Error location hints",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Is my JSON data sent anywhere?",
+        "answer": "No. Formatting happens in your browser."
+      },
+      {
+        "question": "Why is my JSON invalid?",
+        "answer": "Common causes are trailing commas, single quotes, and unquoted keys."
+      }
+    ],
+    "seoTitle": "JSON Formatter – Beautify JSON Online",
+    "metaDescription": "Format, beautify, and minify JSON with clear error messages. Fast and private in your browser.",
+    "keywords": [
+      "json formatter",
+      "json beautifier",
+      "pretty print json",
+      "format json"
+    ],
+    "icon": "braces",
+    "toolType": "text-utility",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-062",
+    "slug": "json-validator",
+    "name": "JSON Validator",
+    "category": "developer-tools",
+    "shortDescription": "Check whether your JSON is valid and see exactly where it breaks.",
+    "howToUse": "Paste JSON and click Validate. A success message or an error with the line and position is shown.",
+    "features": [
+      "Strict JSON validation",
+      "Line and column of errors",
+      "Instant feedback",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "What does 'Unexpected token' mean?",
+        "answer": "The parser found a character where it did not expect one, often a missing comma or quote."
+      },
+      {
+        "question": "Does it support JSON with comments?",
+        "answer": "No. Standard JSON does not allow comments."
+      }
+    ],
+    "seoTitle": "JSON Validator – Check JSON Syntax Online",
+    "metaDescription": "Validate JSON and find syntax errors quickly. Clear messages show exactly where the problem is.",
+    "keywords": [
+      "json validator",
+      "validate json",
+      "json checker",
+      "json lint"
+    ],
+    "icon": "check-circle",
+    "toolType": "checker",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-063",
+    "slug": "html-minifier",
+    "name": "HTML Minifier",
+    "category": "developer-tools",
+    "shortDescription": "Reduce HTML file size by removing unnecessary whitespace and comments.",
+    "howToUse": "Paste your HTML, choose options like removing comments, and click Minify. Copy the compact output. Test the page afterward.",
+    "features": [
+      "Removes whitespace and comments",
+      "Size savings displayed",
+      "Safe-mode options",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Can minifying break my page?",
+        "answer": "Rarely, for example with whitespace-sensitive content. Test the result before deploying."
+      },
+      {
+        "question": "How much will it save?",
+        "answer": "Typically a few percent to a quarter, depending on how the HTML was written."
+      }
+    ],
+    "seoTitle": "HTML Minifier – Compress HTML Online",
+    "metaDescription": "Minify HTML by removing extra whitespace and comments. See size savings and copy the result.",
+    "keywords": [
+      "html minifier",
+      "minify html",
+      "compress html",
+      "html compressor"
+    ],
+    "icon": "file-code",
+    "toolType": "text-utility",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-064",
+    "slug": "css-minifier",
+    "name": "CSS Minifier",
+    "category": "developer-tools",
+    "shortDescription": "Compress CSS to speed up page loading.",
+    "howToUse": "Paste your CSS and click Minify. Review size savings and copy the minified stylesheet.",
+    "features": [
+      "Removes comments and whitespace",
+      "Shows size reduction",
+      "Handles modern CSS syntax",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Does minification change how CSS works?",
+        "answer": "It should not. Only unnecessary characters are removed."
+      },
+      {
+        "question": "Should I keep the original file?",
+        "answer": "Yes. Keep the readable version for editing and deploy the minified one."
+      }
+    ],
+    "seoTitle": "CSS Minifier – Minify CSS Online",
+    "metaDescription": "Minify CSS to reduce file size and improve load times. Instant results in your browser.",
+    "keywords": [
+      "css minifier",
+      "minify css",
+      "compress css",
+      "css compressor"
+    ],
+    "icon": "file-code",
+    "toolType": "text-utility",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-065",
+    "slug": "javascript-minifier",
+    "name": "JavaScript Minifier",
+    "category": "developer-tools",
+    "shortDescription": "Shrink JavaScript by removing whitespace and comments.",
+    "howToUse": "Paste your JavaScript and click Minify. Copy the compact code and test it before publishing.",
+    "features": [
+      "Strips comments and whitespace",
+      "Size comparison",
+      "Syntax error reporting",
+      "Needs a minifier library"
+    ],
+    "faqs": [
+      {
+        "question": "Does it rename variables?",
+        "answer": "Basic minification only removes whitespace and comments. Advanced mangling needs a dedicated minifier."
+      },
+      {
+        "question": "Is it safe for production?",
+        "answer": "Always test minified code. For large projects, use a build tool."
+      }
+    ],
+    "seoTitle": "JavaScript Minifier – Minify JS Online",
+    "metaDescription": "Minify JavaScript to reduce size and speed up your site. Free tool for quick compression.",
+    "keywords": [
+      "javascript minifier",
+      "minify js",
+      "compress javascript",
+      "js compressor"
+    ],
+    "icon": "file-code",
+    "toolType": "text-utility",
+    "processing": "browser",
+    "implementationNote": "Needs a bundled minifier such as Terser for the browser; a naive regex minifier can break code."
+  },
+  {
+    "id": "tool-066",
+    "slug": "base64-encoder",
+    "name": "Base64 Encoder",
+    "category": "developer-tools",
+    "shortDescription": "Encode text into Base64 format.",
+    "howToUse": "Paste your text, click Encode, and copy the Base64 output. Unicode text is handled correctly.",
+    "features": [
+      "UTF-8 safe encoding",
+      "One-click copy",
+      "URL-safe option",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Is Base64 encryption?",
+        "answer": "No. It is an encoding, not security. Anyone can decode it."
+      },
+      {
+        "question": "Why does Base64 end with equals signs?",
+        "answer": "They are padding to make the length a multiple of four."
+      }
+    ],
+    "seoTitle": "Base64 Encoder – Encode Text to Base64",
+    "metaDescription": "Encode text to Base64 instantly. UTF-8 safe, with URL-safe options. Free and private in your browser.",
+    "keywords": [
+      "base64 encode",
+      "text to base64",
+      "base64 encoder",
+      "encode base64"
+    ],
+    "icon": "binary",
+    "toolType": "text-utility",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-067",
+    "slug": "base64-decoder",
+    "name": "Base64 Decoder",
+    "category": "developer-tools",
+    "shortDescription": "Decode Base64 strings back into readable text.",
+    "howToUse": "Paste a Base64 string and click Decode. The original text appears. Invalid input is flagged.",
+    "features": [
+      "UTF-8 aware decoding",
+      "Handles URL-safe Base64",
+      "Error detection",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Why does decoding show strange characters?",
+        "answer": "The data may be binary, such as an image, not text."
+      },
+      {
+        "question": "Can it decode images?",
+        "answer": "Use the Image to Base64 tool's data URI output for images."
+      }
+    ],
+    "seoTitle": "Base64 Decoder – Decode Base64 to Text",
+    "metaDescription": "Decode Base64 strings to plain text. Handles URL-safe input and invalid data. Free in your browser.",
+    "keywords": [
+      "base64 decode",
+      "base64 to text",
+      "base64 decoder",
+      "decode base64"
+    ],
+    "icon": "binary",
+    "toolType": "text-utility",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-068",
+    "slug": "url-encoder",
+    "name": "URL Encoder",
+    "category": "developer-tools",
+    "shortDescription": "Percent-encode text so it is safe to use in a URL.",
+    "howToUse": "Paste text or a query value, choose component or full-URL mode, and click Encode.",
+    "features": [
+      "Component and full URL modes",
+      "UTF-8 support",
+      "One-click copy",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Which characters get encoded?",
+        "answer": "Spaces, symbols, and non-ASCII characters are replaced with percent codes like %20."
+      },
+      {
+        "question": "What is the difference between the two modes?",
+        "answer": "Component mode encodes reserved characters like slashes and question marks. Full URL mode leaves them alone."
+      }
+    ],
+    "seoTitle": "URL Encoder – Percent-Encode URLs Online",
+    "metaDescription": "Encode text for safe use in URLs. Component and full-URL modes. Free and instant.",
+    "keywords": [
+      "url encoder",
+      "urlencode",
+      "percent encoding",
+      "encode url"
+    ],
+    "icon": "link",
+    "toolType": "text-utility",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-069",
+    "slug": "url-decoder",
+    "name": "URL Decoder",
+    "category": "developer-tools",
+    "shortDescription": "Decode percent-encoded URL text into readable form.",
+    "howToUse": "Paste an encoded URL or string and click Decode. Copy the readable result.",
+    "features": [
+      "Component and full URL modes",
+      "Plus-to-space option",
+      "Error detection",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Why does decoding fail?",
+        "answer": "Malformed percent sequences, such as a lone % sign, cannot be decoded."
+      },
+      {
+        "question": "What does %20 mean?",
+        "answer": "It is the encoded form of a space."
+      }
+    ],
+    "seoTitle": "URL Decoder – Decode Percent-Encoded URLs",
+    "metaDescription": "Decode URL-encoded strings into readable text instantly. Free and private in your browser.",
+    "keywords": [
+      "url decoder",
+      "urldecode",
+      "decode url",
+      "percent decode"
+    ],
+    "icon": "link",
+    "toolType": "text-utility",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-070",
+    "slug": "html-entity-encoder",
+    "name": "HTML Entity Encoder",
+    "category": "developer-tools",
+    "shortDescription": "Convert special characters into HTML entities and back.",
+    "howToUse": "Paste text, choose encode or decode, and click Convert. Copy the output into your HTML.",
+    "features": [
+      "Encode and decode",
+      "Named and numeric entities",
+      "Handles quotes and symbols",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Why encode HTML entities?",
+        "answer": "Characters like < and & have special meaning in HTML. Encoding displays them as text safely."
+      },
+      {
+        "question": "Does it prevent XSS?",
+        "answer": "It helps when escaping output, but use proper security practices in your application."
+      }
+    ],
+    "seoTitle": "HTML Entity Encoder – Encode and Decode HTML",
+    "metaDescription": "Convert special characters to HTML entities and back. Quick, free, and private in your browser.",
+    "keywords": [
+      "html entity encoder",
+      "html escape",
+      "html entities",
+      "encode html"
+    ],
+    "icon": "code",
+    "toolType": "text-utility",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-071",
+    "slug": "percentage-calculator",
+    "name": "Percentage Calculator",
+    "category": "calculators-converters",
+    "shortDescription": "Work out percentages, percentage change, and what percent one number is of another.",
+    "howToUse": "Choose a calculation type, enter your numbers, and see the result instantly with the formula used.",
+    "features": [
+      "Percent of a number",
+      "Percentage increase and decrease",
+      "X is what percent of Y",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "How do I calculate a percentage of a number?",
+        "answer": "Multiply the number by the percentage and divide by 100. For example, 15% of 200 is 30."
+      },
+      {
+        "question": "How is percentage change calculated?",
+        "answer": "Subtract the old value from the new value, divide by the old value, and multiply by 100."
+      }
+    ],
+    "seoTitle": "Percentage Calculator – Calculate Percent Online",
+    "metaDescription": "Calculate percentages, percent change, and percent of a number. Free calculator with clear formulas.",
+    "keywords": [
+      "percentage calculator",
+      "percent calculator",
+      "percent change",
+      "calculate percentage"
+    ],
+    "icon": "percent",
+    "toolType": "calculator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-072",
+    "slug": "age-calculator",
+    "name": "Age Calculator",
+    "category": "calculators-converters",
+    "shortDescription": "Find your exact age in years, months, and days.",
+    "howToUse": "Enter your date of birth and, optionally, another date to compare against. Your exact age and next birthday countdown appear.",
+    "features": [
+      "Years, months, and days",
+      "Custom comparison date",
+      "Days until next birthday",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Does it handle leap years?",
+        "answer": "Yes. Leap years are accounted for in the calculation."
+      },
+      {
+        "question": "Can I calculate someone else's age?",
+        "answer": "Yes. Enter any date of birth."
+      }
+    ],
+    "seoTitle": "Age Calculator – Calculate Exact Age Online",
+    "metaDescription": "Calculate your exact age in years, months, and days and see when your next birthday is.",
+    "keywords": [
+      "age calculator",
+      "calculate age",
+      "date of birth calculator",
+      "how old am i"
+    ],
+    "icon": "cake",
+    "toolType": "calculator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-073",
+    "slug": "bmi-calculator",
+    "name": "BMI Calculator",
+    "category": "calculators-converters",
+    "shortDescription": "Calculate body mass index from your height and weight.",
+    "howToUse": "Choose metric or imperial units, enter your height and weight, and see your BMI with its standard category. This is a screening number, not a diagnosis.",
+    "features": [
+      "Metric and imperial units",
+      "Standard BMI categories",
+      "Clear formula explanation",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Is BMI a reliable measure of health?",
+        "answer": "It is a general screening tool. It does not account for muscle mass, age, or body composition, so talk to a healthcare professional."
+      },
+      {
+        "question": "What is a healthy BMI range?",
+        "answer": "The standard range for adults is 18.5 to 24.9, according to widely used guidelines."
+      }
+    ],
+    "seoTitle": "BMI Calculator – Body Mass Index Calculator",
+    "metaDescription": "Calculate your BMI using metric or imperial units. Understand what the number means. Not medical advice.",
+    "keywords": [
+      "bmi calculator",
+      "body mass index",
+      "calculate bmi",
+      "bmi chart"
+    ],
+    "icon": "activity",
+    "toolType": "calculator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-074",
+    "slug": "loan-calculator",
+    "name": "Loan Calculator",
+    "category": "calculators-converters",
+    "shortDescription": "Estimate monthly payments and total interest on a loan.",
+    "howToUse": "Enter the loan amount, interest rate, and term. See the monthly payment, total interest, and an amortization table. Results are estimates only.",
+    "features": [
+      "Monthly payment estimate",
+      "Total interest and cost",
+      "Amortization schedule",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Are the results exact?",
+        "answer": "They are estimates. Your lender's terms, fees, and rounding may differ."
+      },
+      {
+        "question": "How does a shorter term affect cost?",
+        "answer": "Monthly payments rise, but total interest paid is lower."
+      }
+    ],
+    "seoTitle": "Loan Calculator – Monthly Payment Estimator",
+    "metaDescription": "Estimate loan payments, total interest, and amortization. Free calculator for personal and auto loans.",
+    "keywords": [
+      "loan calculator",
+      "monthly payment calculator",
+      "loan interest",
+      "amortization calculator"
+    ],
+    "icon": "banknote",
+    "toolType": "calculator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-075",
+    "slug": "mortgage-calculator",
+    "name": "Mortgage Calculator",
+    "category": "calculators-converters",
+    "shortDescription": "Estimate monthly mortgage payments including property tax and insurance.",
+    "howToUse": "Enter the home price, down payment, rate, and term. Optionally add property tax and insurance. See the monthly estimate and amortization breakdown.",
+    "features": [
+      "Principal and interest estimate",
+      "Optional tax and insurance",
+      "Down payment percentage",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "What is included in the estimate?",
+        "answer": "Principal and interest, plus any tax and insurance you enter. Fees and PMI are not included unless added."
+      },
+      {
+        "question": "How much should I put down?",
+        "answer": "It varies by lender and country. Talk to a mortgage professional for advice."
+      }
+    ],
+    "seoTitle": "Mortgage Calculator – Monthly Payment Estimator",
+    "metaDescription": "Estimate monthly mortgage payments with down payment, tax, and insurance. Free and easy to use.",
+    "keywords": [
+      "mortgage calculator",
+      "home loan calculator",
+      "mortgage payment",
+      "monthly mortgage"
+    ],
+    "icon": "home",
+    "toolType": "calculator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-076",
+    "slug": "discount-calculator",
+    "name": "Discount Calculator",
+    "category": "calculators-converters",
+    "shortDescription": "Find the sale price and savings after a percentage discount.",
+    "howToUse": "Enter the original price and the discount percentage. See the final price and how much you save. Add sales tax if needed.",
+    "features": [
+      "Final price and savings",
+      "Optional sales tax",
+      "Stacked discount support",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "How do I calculate a 30% discount?",
+        "answer": "Multiply the price by 0.30 to get the savings, then subtract it from the original price."
+      },
+      {
+        "question": "How do two discounts combine?",
+        "answer": "They apply one after the other, so 20% then 10% is not the same as 30% off."
+      }
+    ],
+    "seoTitle": "Discount Calculator – Calculate Sale Prices",
+    "metaDescription": "Calculate sale prices, savings, and stacked discounts with optional tax. Free and instant.",
+    "keywords": [
+      "discount calculator",
+      "sale price calculator",
+      "percent off",
+      "price after discount"
+    ],
+    "icon": "tag",
+    "toolType": "calculator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-077",
+    "slug": "tip-calculator",
+    "name": "Tip Calculator",
+    "category": "calculators-converters",
+    "shortDescription": "Calculate the tip and split the bill between people.",
+    "howToUse": "Enter the bill total, choose a tip percentage, and set how many people are sharing. See the tip and each person's share.",
+    "features": [
+      "Custom tip percentage",
+      "Bill splitting",
+      "Rounding options",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "How much should I tip?",
+        "answer": "Customs vary. In the United States, 15 to 20 percent is common at restaurants. Check local norms elsewhere."
+      },
+      {
+        "question": "Can I round the total?",
+        "answer": "Yes. Choose rounding to the nearest dollar if you prefer."
+      }
+    ],
+    "seoTitle": "Tip Calculator – Split the Bill and Tip",
+    "metaDescription": "Calculate tips and split bills between friends. Choose a tip percentage and see each person's share.",
+    "keywords": [
+      "tip calculator",
+      "bill splitter",
+      "gratuity calculator",
+      "split bill"
+    ],
+    "icon": "receipt",
+    "toolType": "calculator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-078",
+    "slug": "currency-converter",
+    "name": "Currency Converter",
+    "category": "calculators-converters",
+    "shortDescription": "Convert between world currencies using exchange rates.",
+    "howToUse": "Choose your currencies, enter an amount, and see the converted value with the rate and update time.",
+    "features": [
+      "Major world currencies",
+      "Rate and update time shown",
+      "Swap currencies quickly",
+      "Needs a live exchange-rate API"
+    ],
+    "faqs": [
+      {
+        "question": "Are the rates live?",
+        "answer": "Rates depend on the data source and update schedule. Check the timestamp shown."
+      },
+      {
+        "question": "Will my bank use the same rate?",
+        "answer": "Probably not. Banks and card providers add fees and margins."
+      }
+    ],
+    "seoTitle": "Currency Converter – Live Exchange Rates",
+    "metaDescription": "Convert USD, GBP, EUR, CAD, AUD, and more. See the rate and update time. Rates are for information only.",
+    "keywords": [
+      "currency converter",
+      "exchange rate",
+      "convert currency",
+      "usd to eur"
+    ],
+    "icon": "coins",
+    "toolType": "calculator",
+    "processing": "external-api",
+    "implementationNote": "Requires an exchange-rate API (for example a free-tier or paid provider). No API key is included; check licensing terms before launch."
+  },
+  {
+    "id": "tool-079",
+    "slug": "unit-converter",
+    "name": "Unit Converter",
+    "category": "calculators-converters",
+    "shortDescription": "Convert length, weight, temperature, volume, and more.",
+    "howToUse": "Pick a measurement type, choose the units, and enter a value. The converted result appears right away.",
+    "features": [
+      "Length, weight, temperature, volume, and area",
+      "Metric and imperial",
+      "Instant results",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "How do I convert Celsius to Fahrenheit?",
+        "answer": "Multiply by 9/5 and add 32."
+      },
+      {
+        "question": "Does it work offline?",
+        "answer": "Yes. After the page loads, conversions run locally."
+      }
+    ],
+    "seoTitle": "Unit Converter – Metric and Imperial Conversions",
+    "metaDescription": "Convert length, weight, temperature, volume, and more between metric and imperial units. Free and instant.",
+    "keywords": [
+      "unit converter",
+      "metric to imperial",
+      "convert units",
+      "measurement converter"
+    ],
+    "icon": "ruler",
+    "toolType": "calculator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-080",
+    "slug": "date-difference-calculator",
+    "name": "Date Difference Calculator",
+    "category": "calculators-converters",
+    "shortDescription": "Find the time between two dates in days, weeks, months, and years.",
+    "howToUse": "Pick a start date and an end date. The difference appears in several units. Optionally exclude weekends.",
+    "features": [
+      "Days, weeks, months, and years",
+      "Business days option",
+      "Leap year aware",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Does it include the end date?",
+        "answer": "You can choose whether to include it in the count."
+      },
+      {
+        "question": "Can it count only weekdays?",
+        "answer": "Yes. Enable the business days option. Public holidays are not included."
+      }
+    ],
+    "seoTitle": "Date Difference Calculator – Days Between Dates",
+    "metaDescription": "Calculate the number of days, weeks, and months between two dates. Includes a business days option.",
+    "keywords": [
+      "date difference",
+      "days between dates",
+      "date calculator",
+      "business days calculator"
+    ],
+    "icon": "calendar",
+    "toolType": "calculator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-081",
+    "slug": "qr-code-generator",
+    "name": "QR Code Generator",
+    "category": "qr-social-media-tools",
+    "shortDescription": "Create QR codes for links, text, email, and phone numbers.",
+    "howToUse": "Enter your content, choose size and colors, and download the QR code as PNG or SVG. Test it with your phone before printing.",
+    "features": [
+      "URL, text, email, and phone codes",
+      "Custom colors and size",
+      "PNG and SVG download",
+      "Static codes that never expire"
+    ],
+    "faqs": [
+      {
+        "question": "Do these QR codes expire?",
+        "answer": "No. They are static, so the data is stored in the code itself and works as long as your link works."
+      },
+      {
+        "question": "How large should I print a QR code?",
+        "answer": "At least about 2 by 2 centimeters, and test it before mass printing."
+      }
+    ],
+    "seoTitle": "QR Code Generator – Create Free QR Codes",
+    "metaDescription": "Create QR codes for URLs, text, email, and more. Customize colors and download PNG or SVG. No sign-up.",
+    "keywords": [
+      "qr code generator",
+      "create qr code",
+      "free qr code",
+      "qr maker"
+    ],
+    "icon": "qr-code",
+    "toolType": "generator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-082",
+    "slug": "qr-code-scanner",
+    "name": "QR Code Scanner",
+    "category": "qr-social-media-tools",
+    "shortDescription": "Scan QR codes with your camera or from an uploaded image.",
+    "howToUse": "Allow camera access and point at a QR code, or upload an image. The decoded content appears. Check links carefully before opening them.",
+    "features": [
+      "Camera and image scanning",
+      "Copy decoded content",
+      "Link safety reminder",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Is it safe to open scanned links?",
+        "answer": "Not always. Check the URL first, because QR codes can lead to malicious sites."
+      },
+      {
+        "question": "Why can't it read my QR code?",
+        "answer": "Poor lighting, blur, or damage can prevent scanning. Try a clearer image."
+      }
+    ],
+    "seoTitle": "QR Code Scanner – Scan QR Codes Online",
+    "metaDescription": "Scan QR codes using your camera or an image file. Decode content privately in your browser.",
+    "keywords": [
+      "qr code scanner",
+      "scan qr code",
+      "qr reader",
+      "read qr code"
+    ],
+    "icon": "scan",
+    "toolType": "utility",
+    "processing": "browser",
+    "implementationNote": "Camera access requires HTTPS and user permission."
+  },
+  {
+    "id": "tool-083",
+    "slug": "wifi-qr-generator",
+    "name": "WiFi QR Generator",
+    "category": "qr-social-media-tools",
+    "shortDescription": "Create a QR code that lets guests join your WiFi without typing the password.",
+    "howToUse": "Enter your network name, password, and security type, then generate the code. Guests can scan it with a phone camera to connect.",
+    "features": [
+      "WPA, WEP, and open network support",
+      "Hidden network option",
+      "Printable QR code",
+      "Generated locally, nothing sent"
+    ],
+    "faqs": [
+      {
+        "question": "Is it safe to put my WiFi password in a QR code?",
+        "answer": "Anyone who sees the code can join the network, so only display it where you are comfortable sharing access."
+      },
+      {
+        "question": "Does it work on all phones?",
+        "answer": "Most modern iPhone and Android cameras can scan WiFi QR codes."
+      }
+    ],
+    "seoTitle": "WiFi QR Code Generator – Share WiFi Easily",
+    "metaDescription": "Generate a WiFi QR code so guests can connect instantly. Private, free, and made in your browser.",
+    "keywords": [
+      "wifi qr code",
+      "wifi qr generator",
+      "share wifi",
+      "wifi password qr"
+    ],
+    "icon": "wifi",
+    "toolType": "generator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-084",
+    "slug": "barcode-generator",
+    "name": "Barcode Generator",
+    "category": "qr-social-media-tools",
+    "shortDescription": "Generate barcodes in common formats like Code 128, EAN-13, and UPC.",
+    "howToUse": "Choose a format, enter your number or text, and download the barcode image. Verify retail codes with an official registry.",
+    "features": [
+      "Code 128, EAN, UPC, and more",
+      "PNG and SVG download",
+      "Custom size and colors",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Can I use these for retail products?",
+        "answer": "Retail barcodes like EAN and UPC must be registered through GS1. This tool only draws the image."
+      },
+      {
+        "question": "Which format should I choose?",
+        "answer": "Code 128 is flexible for internal use. EAN or UPC are for retail."
+      }
+    ],
+    "seoTitle": "Barcode Generator – Create Barcodes Online",
+    "metaDescription": "Generate Code 128, EAN-13, UPC, and other barcodes. Download PNG or SVG for free.",
+    "keywords": [
+      "barcode generator",
+      "create barcode",
+      "ean barcode",
+      "code 128"
+    ],
+    "icon": "barcode",
+    "toolType": "generator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-085",
+    "slug": "instagram-bio-generator",
+    "name": "Instagram Bio Generator",
+    "category": "qr-social-media-tools",
+    "shortDescription": "Build an Instagram bio from templates, emojis, and your own details.",
+    "howToUse": "Enter your name, interests, and tone, then choose a template. Edit the result and copy it. Bios are template-based, not AI-written.",
+    "features": [
+      "Templates for different styles",
+      "Emoji and line break support",
+      "Character count under 150",
+      "Template-based, not AI"
+    ],
+    "faqs": [
+      {
+        "question": "How long can an Instagram bio be?",
+        "answer": "Instagram currently allows up to 150 characters, but limits can change."
+      },
+      {
+        "question": "Is the bio written by AI?",
+        "answer": "No. It combines templates with your details, so edit it to sound like you."
+      }
+    ],
+    "seoTitle": "Instagram Bio Generator – Create Your Bio",
+    "metaDescription": "Create an Instagram bio with templates, emojis, and a live character counter. Free and easy.",
+    "keywords": [
+      "instagram bio generator",
+      "bio ideas",
+      "instagram bio",
+      "bio maker"
+    ],
+    "icon": "instagram",
+    "toolType": "generator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-086",
+    "slug": "hashtag-generator",
+    "name": "Hashtag Generator",
+    "category": "qr-social-media-tools",
+    "shortDescription": "Get relevant hashtag ideas from your keywords and topic.",
+    "howToUse": "Enter a keyword or topic, choose a platform, and click Generate. Copy the hashtags you like. Suggestions are keyword-based and do not reflect live trends.",
+    "features": [
+      "Keyword-based suggestions",
+      "Platform presets",
+      "Copy all or one at a time",
+      "No live trend data"
+    ],
+    "faqs": [
+      {
+        "question": "How many hashtags should I use?",
+        "answer": "It varies by platform and audience. A handful of relevant tags usually works better than many generic ones."
+      },
+      {
+        "question": "Does it show trending hashtags?",
+        "answer": "No. Live trends would need a social platform data source."
+      }
+    ],
+    "seoTitle": "Hashtag Generator – Find Hashtag Ideas",
+    "metaDescription": "Generate hashtag ideas from your keywords for Instagram, TikTok, and more. Free and simple.",
+    "keywords": [
+      "hashtag generator",
+      "hashtag ideas",
+      "instagram hashtags",
+      "tiktok hashtags"
+    ],
+    "icon": "hash",
+    "toolType": "generator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-087",
+    "slug": "youtube-thumbnail-downloader",
+    "name": "YouTube Thumbnail Downloader",
+    "category": "qr-social-media-tools",
+    "shortDescription": "Get the thumbnail image of a public YouTube video from its link.",
+    "howToUse": "Paste a YouTube video URL, choose a size, and download the thumbnail. Only use thumbnails you have rights to use.",
+    "features": [
+      "Multiple resolutions",
+      "Works with standard video URLs",
+      "Direct download",
+      "Thumbnails remain copyrighted"
+    ],
+    "faqs": [
+      {
+        "question": "Is it legal to download a thumbnail?",
+        "answer": "Thumbnails belong to their creators. Use them only with permission or under applicable fair-use rules."
+      },
+      {
+        "question": "Why is the highest resolution missing?",
+        "answer": "Not every video has a maximum-resolution thumbnail."
+      }
+    ],
+    "seoTitle": "YouTube Thumbnail Downloader – HD Thumbnails",
+    "metaDescription": "Download YouTube video thumbnails in multiple sizes. Paste a link and save the image.",
+    "keywords": [
+      "youtube thumbnail downloader",
+      "download youtube thumbnail",
+      "youtube thumbnail",
+      "thumbnail grabber"
+    ],
+    "icon": "youtube",
+    "toolType": "utility",
+    "processing": "browser",
+    "implementationNote": "Builds public thumbnail image URLs from the video ID; no API key required, but the image fetch may be blocked by CORS for direct download."
+  },
+  {
+    "id": "tool-088",
+    "slug": "youtube-title-generator",
+    "name": "YouTube Title Generator",
+    "category": "qr-social-media-tools",
+    "shortDescription": "Get video title ideas based on your topic and style.",
+    "howToUse": "Enter your topic and pick a style, then generate. Edit favorites and check the length. Suggestions are template-based, not AI-written.",
+    "features": [
+      "Multiple title styles",
+      "Length indicator",
+      "Copy with one click",
+      "Template-based"
+    ],
+    "faqs": [
+      {
+        "question": "How long should a YouTube title be?",
+        "answer": "Keep it under about 60 characters so it is less likely to be cut off in results."
+      },
+      {
+        "question": "Will these titles get views?",
+        "answer": "No tool can guarantee that. Titles should match your actual video content."
+      }
+    ],
+    "seoTitle": "YouTube Title Generator – Video Title Ideas",
+    "metaDescription": "Generate YouTube video title ideas by topic and style. Free, instant, and easy to customize.",
+    "keywords": [
+      "youtube title generator",
+      "video title ideas",
+      "youtube titles",
+      "title generator"
+    ],
+    "icon": "youtube",
+    "toolType": "generator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-089",
+    "slug": "social-media-post-resizer",
+    "name": "Social Media Post Resizer",
+    "category": "qr-social-media-tools",
+    "shortDescription": "Resize images to the right dimensions for popular social platforms.",
+    "howToUse": "Upload an image, choose a platform and post type, adjust the crop, and download. Presets reflect commonly published sizes and may change.",
+    "features": [
+      "Presets for major platforms",
+      "Crop and position control",
+      "Batch export for multiple sizes",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Are the sizes always up to date?",
+        "answer": "Platforms change specifications from time to time, so check their current guidelines."
+      },
+      {
+        "question": "Will it stretch my image?",
+        "answer": "No. It crops to the target ratio so proportions are preserved."
+      }
+    ],
+    "seoTitle": "Social Media Image Resizer – Post Size Tool",
+    "metaDescription": "Resize images for Instagram, Facebook, X, LinkedIn, and more. Free and private in your browser.",
+    "keywords": [
+      "social media image size",
+      "post resizer",
+      "instagram size",
+      "facebook image size"
+    ],
+    "icon": "crop",
+    "toolType": "file-processor",
+    "processing": "browser",
+    "implementationNote": "Verify platform dimension presets against current official documentation before launch."
+  },
+  {
+    "id": "tool-090",
+    "slug": "link-in-bio-generator",
+    "name": "Link in Bio Generator",
+    "category": "qr-social-media-tools",
+    "shortDescription": "Create a simple links page you can use as your social media bio link.",
+    "howToUse": "Add your name, photo, and links, choose a theme, and generate the HTML page. Host it on any web server or static host.",
+    "features": [
+      "Custom links and themes",
+      "Single HTML file output",
+      "Mobile-friendly layout",
+      "Hosting is up to you"
+    ],
+    "faqs": [
+      {
+        "question": "Where does the page live?",
+        "answer": "The tool generates a file. You need to host it yourself on a website or static host."
+      },
+      {
+        "question": "Does it track clicks?",
+        "answer": "No. Click tracking would need an analytics service."
+      }
+    ],
+    "seoTitle": "Link in Bio Generator – Create a Links Page",
+    "metaDescription": "Build a simple, mobile-friendly link in bio page. Export a single HTML file you can host anywhere.",
+    "keywords": [
+      "link in bio",
+      "link in bio generator",
+      "bio link page",
+      "linktree alternative"
+    ],
+    "icon": "link",
+    "toolType": "generator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-091",
+    "slug": "password-generator",
+    "name": "Password Generator",
+    "category": "security-utility-tools",
+    "shortDescription": "Create strong, random passwords with the length and characters you choose.",
+    "howToUse": "Set the length, choose character types, and click Generate. Copy the password and store it in a password manager.",
+    "features": [
+      "Length up to 64 characters",
+      "Uppercase, lowercase, numbers, and symbols",
+      "Uses your browser's secure random source",
+      "Nothing is stored or sent"
+    ],
+    "faqs": [
+      {
+        "question": "How long should a password be?",
+        "answer": "Longer is better. Many experts recommend at least 12 to 16 characters for important accounts."
+      },
+      {
+        "question": "Is a generated password stored anywhere?",
+        "answer": "No. It is created in your browser and disappears when you leave the page."
+      }
+    ],
+    "seoTitle": "Password Generator – Create Strong Passwords",
+    "metaDescription": "Generate strong random passwords with custom length and characters. Private and created in your browser.",
+    "keywords": [
+      "password generator",
+      "strong password",
+      "random password",
+      "secure password"
+    ],
+    "icon": "key",
+    "toolType": "generator",
+    "processing": "browser",
+    "implementationNote": "Use crypto.getRandomValues, not Math.random."
+  },
+  {
+    "id": "tool-092",
+    "slug": "password-strength-checker",
+    "name": "Password Strength Checker",
+    "category": "security-utility-tools",
+    "shortDescription": "Estimate how strong a password is and get tips to improve it.",
+    "howToUse": "Type a password to see an instant strength estimate and suggestions. Avoid entering a password you use for real accounts on sites you do not trust.",
+    "features": [
+      "Real-time strength estimate",
+      "Improvement tips",
+      "Common pattern detection",
+      "Checked locally in your browser"
+    ],
+    "faqs": [
+      {
+        "question": "Is it safe to type my real password?",
+        "answer": "This tool runs locally and sends nothing, but it is safer to test a similar example rather than your actual password."
+      },
+      {
+        "question": "Does a high score guarantee safety?",
+        "answer": "No. A password can still be exposed in a data breach, so use unique passwords and two-factor authentication."
+      }
+    ],
+    "seoTitle": "Password Strength Checker – Test Your Password",
+    "metaDescription": "Check password strength and get tips to make it stronger. Runs locally in your browser.",
+    "keywords": [
+      "password strength checker",
+      "check password strength",
+      "password tester",
+      "how strong is my password"
+    ],
+    "icon": "shield-check",
+    "toolType": "checker",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-093",
+    "slug": "hash-generator",
+    "name": "Hash Generator",
+    "category": "security-utility-tools",
+    "shortDescription": "Generate SHA-256, SHA-512, and other hashes from text.",
+    "howToUse": "Enter text, choose an algorithm, and see the hash instantly. Copy the result. Do not use plain hashes alone to store passwords.",
+    "features": [
+      "SHA-1, SHA-256, SHA-384, and SHA-512",
+      "Instant results",
+      "Hex output",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Is hashing the same as encryption?",
+        "answer": "No. Hashing is one-way and cannot be reversed, while encryption can be decrypted with a key."
+      },
+      {
+        "question": "Should I use MD5 or SHA-1?",
+        "answer": "Both are considered weak for security. Use SHA-256 or stronger."
+      }
+    ],
+    "seoTitle": "Hash Generator – SHA-256, SHA-512 Online",
+    "metaDescription": "Generate SHA hashes from text in your browser. Fast, free, and private.",
+    "keywords": [
+      "hash generator",
+      "sha256 generator",
+      "sha512 hash",
+      "text to hash"
+    ],
+    "icon": "fingerprint",
+    "toolType": "generator",
+    "processing": "browser",
+    "implementationNote": "Web Crypto API supports SHA-1/256/384/512; MD5 needs a separate library."
+  },
+  {
+    "id": "tool-094",
+    "slug": "uuid-generator",
+    "name": "UUID Generator",
+    "category": "security-utility-tools",
+    "shortDescription": "Generate random version 4 UUIDs for databases and applications.",
+    "howToUse": "Choose how many UUIDs you need, click Generate, and copy them. Optionally uppercase or remove hyphens.",
+    "features": [
+      "Version 4 UUIDs",
+      "Bulk generation",
+      "Format options",
+      "Uses secure randomness"
+    ],
+    "faqs": [
+      {
+        "question": "Are UUIDs truly unique?",
+        "answer": "Version 4 UUIDs are random, so collisions are extremely unlikely but not mathematically impossible."
+      },
+      {
+        "question": "What does a UUID look like?",
+        "answer": "It is 32 hexadecimal characters in five groups separated by hyphens."
+      }
+    ],
+    "seoTitle": "UUID Generator – Create Random UUID v4",
+    "metaDescription": "Generate UUID v4 values in bulk. Copy with one click. Free and private in your browser.",
+    "keywords": [
+      "uuid generator",
+      "guid generator",
+      "random uuid",
+      "uuid v4"
+    ],
+    "icon": "fingerprint",
+    "toolType": "generator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-095",
+    "slug": "random-number-generator",
+    "name": "Random Number Generator",
+    "category": "security-utility-tools",
+    "shortDescription": "Pick random numbers within a range you set.",
+    "howToUse": "Enter a minimum and maximum, choose how many numbers, and click Generate. Choose whether duplicates are allowed.",
+    "features": [
+      "Custom range and quantity",
+      "Unique-only option",
+      "Instant results",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Is it truly random?",
+        "answer": "It uses your browser's random source, which is suitable for everyday uses but not for gambling or cryptography."
+      },
+      {
+        "question": "Can I pick without repeats?",
+        "answer": "Yes. Turn on the unique numbers option."
+      }
+    ],
+    "seoTitle": "Random Number Generator – Pick Random Numbers",
+    "metaDescription": "Generate random numbers in any range with optional unique results. Free and instant.",
+    "keywords": [
+      "random number generator",
+      "random number picker",
+      "rng",
+      "number generator"
+    ],
+    "icon": "dices",
+    "toolType": "generator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-096",
+    "slug": "stopwatch",
+    "name": "Stopwatch",
+    "category": "security-utility-tools",
+    "shortDescription": "Time anything with a simple online stopwatch that supports laps.",
+    "howToUse": "Click Start to begin timing, Lap to record split times, and Stop when finished. Reset clears the timer.",
+    "features": [
+      "Start, stop, and reset",
+      "Lap times",
+      "Millisecond display",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Does it keep running if I switch tabs?",
+        "answer": "Yes. It uses timestamps, so the time stays accurate even in a background tab."
+      },
+      {
+        "question": "How accurate is it?",
+        "answer": "Accurate enough for everyday use. It is not suited to professional timing."
+      }
+    ],
+    "seoTitle": "Online Stopwatch – Free Timer with Laps",
+    "metaDescription": "Free online stopwatch with lap times. Simple, accurate, and works in your browser.",
+    "keywords": [
+      "online stopwatch",
+      "stopwatch",
+      "lap timer",
+      "timer with laps"
+    ],
+    "icon": "timer",
+    "toolType": "utility",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-097",
+    "slug": "countdown-timer",
+    "name": "Countdown Timer",
+    "category": "security-utility-tools",
+    "shortDescription": "Set a countdown for any duration and get an alert when time is up.",
+    "howToUse": "Enter hours, minutes, and seconds, then click Start. A sound plays when the timer ends if your browser allows audio.",
+    "features": [
+      "Custom duration",
+      "Sound alert",
+      "Pause and resume",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Will the alarm sound if the tab is in the background?",
+        "answer": "Usually, but some browsers limit background audio. Keep the tab open for best results."
+      },
+      {
+        "question": "Can I set a countdown to a date?",
+        "answer": "This tool counts down a duration. Use the Date Difference Calculator for dates."
+      }
+    ],
+    "seoTitle": "Countdown Timer – Free Online Timer",
+    "metaDescription": "Set a countdown timer with alarm. Choose any duration and get notified when time is up.",
+    "keywords": [
+      "countdown timer",
+      "online timer",
+      "timer alarm",
+      "kitchen timer"
+    ],
+    "icon": "hourglass",
+    "toolType": "utility",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-098",
+    "slug": "color-picker",
+    "name": "Color Picker",
+    "category": "security-utility-tools",
+    "shortDescription": "Pick colors visually and copy HEX, RGB, and HSL values.",
+    "howToUse": "Use the color panel or enter a value. Copy the format you need. Save colors to a quick palette.",
+    "features": [
+      "HEX, RGB, and HSL conversion",
+      "Visual picker",
+      "Quick palette",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "What is a HEX color code?",
+        "answer": "It is a six-digit code starting with #, representing red, green, and blue values."
+      },
+      {
+        "question": "Can I check contrast?",
+        "answer": "This tool shows color values only. Use a dedicated contrast checker for accessibility."
+      }
+    ],
+    "seoTitle": "Color Picker – HEX, RGB, HSL Converter",
+    "metaDescription": "Pick colors and copy HEX, RGB, and HSL codes. Free online color picker with quick palette.",
+    "keywords": [
+      "color picker",
+      "hex color",
+      "rgb to hex",
+      "color converter"
+    ],
+    "icon": "palette",
+    "toolType": "utility",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-099",
+    "slug": "qr-wifi-password-tool",
+    "name": "QR WiFi Password Tool",
+    "category": "security-utility-tools",
+    "shortDescription": "Make a printable WiFi card with your network name, password, and a scannable QR code.",
+    "howToUse": "Enter your network details, choose a card layout, and download or print it. Display it only where guests are welcome to connect.",
+    "features": [
+      "Printable card layout",
+      "QR code and written password",
+      "Several card styles",
+      "Created locally in your browser"
+    ],
+    "faqs": [
+      {
+        "question": "How is this different from the WiFi QR Generator?",
+        "answer": "This tool creates a complete printable card with a QR code and readable text, not just the code image."
+      },
+      {
+        "question": "Is my password saved?",
+        "answer": "No. It is processed in your browser and never uploaded."
+      }
+    ],
+    "seoTitle": "WiFi Password Card – Printable QR WiFi Sheet",
+    "metaDescription": "Create a printable WiFi card with a QR code and password for guests. Private and free.",
+    "keywords": [
+      "wifi password card",
+      "printable wifi qr",
+      "guest wifi sign",
+      "wifi sign generator"
+    ],
+    "icon": "wifi",
+    "toolType": "generator",
+    "processing": "browser"
+  },
+  {
+    "id": "tool-100",
+    "slug": "file-extension-checker",
+    "name": "File Extension Checker",
+    "category": "security-utility-tools",
+    "shortDescription": "Check a file's extension and see what type of file it is.",
+    "howToUse": "Select a file or type a name. The tool shows the extension, common type, and whether the extension matches the file's detected content type.",
+    "features": [
+      "Extension and MIME type display",
+      "Mismatch warning",
+      "Common type descriptions",
+      "Browser-based"
+    ],
+    "faqs": [
+      {
+        "question": "Can it detect a disguised file?",
+        "answer": "It compares the extension to the file's content signature for common types, but it is not a virus scanner."
+      },
+      {
+        "question": "Is the file uploaded?",
+        "answer": "No. It only reads the file's name and first bytes locally."
+      }
+    ],
+    "seoTitle": "File Extension Checker – Identify File Types",
+    "metaDescription": "Check a file's extension and detected type. Spot mismatched extensions quickly, privately in your browser.",
+    "keywords": [
+      "file extension checker",
+      "file type checker",
+      "identify file type",
+      "check file extension"
+    ],
+    "icon": "file-search",
+    "toolType": "checker",
+    "processing": "browser",
+    "implementationNote": "Not antivirus software; limited to common file signatures."
+  }
+];
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { TOOL_CATEGORIES, TOOLS };
+}
+if (typeof window !== "undefined") {
+  window.TOOL_CATEGORIES = TOOL_CATEGORIES;
+  window.TOOLS = TOOLS;
+}
