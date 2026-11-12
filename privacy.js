@@ -1,0 +1,20 @@
+// src/pages/privacy.js — Privacy Policy page content.
+import { UPDATED } from "./common.js";
+
+export const PRIVACY = String.raw`<h1>Privacy Policy</h1>` + UPDATED + String.raw`
+<p>This Privacy Policy explains how ToolsNest ("we", "us", "our") collects, uses and protects information when you use our website. By using the site you agree to this policy.</p>
+<h2>1. Information we collect</h2>
+<ul><li><b>No accounts:</b> we do not ask you to register and we do not collect your name, phone number or address.</li><li><b>Your files stay with you:</b> photos, videos, PDFs and text you use in our tools are processed locally in your browser. They are not uploaded to or stored on our servers.</li><li><b>Log data:</b> like most websites, our hosting provider (Cloudflare) may automatically record technical data such as IP address, browser type, device, pages visited and time of visit, for security and performance.</li><li><b>Messages you send:</b> if you email us, we keep your email address and message only to reply to you.</li></ul>
+<h2>2. Cookies and local storage</h2><p>We store small items in your browser, such as your light/dark theme choice and whether you have dismissed our cookie notice. Advertising partners may also set cookies, as explained below. You can delete or block cookies in your browser settings.</p>
+<h2>3. Advertising (Google AdSense)</h2>
+<p>We may show ads served by Google and other third-party vendors. Third-party vendors, including Google, use cookies to serve ads based on a user's prior visits to this website or other websites.</p>
+<p>Google's use of advertising cookies enables it and its partners to serve ads to you based on your visit to our site and/or other sites on the Internet.</p>
+<p>You can opt out of personalised advertising by visiting <a href="https://adssettings.google.com" target="_blank" rel="noopener">Google Ads Settings</a>. You can also opt out of some third-party vendors' use of cookies for personalised advertising at <a href="https://www.aboutads.info" target="_blank" rel="noopener">www.aboutads.info</a>. To learn how Google uses data when you use partner sites, see <a href="https://policies.google.com/technologies/partner-sites" target="_blank" rel="noopener">policies.google.com/technologies/partner-sites</a>.</p>
+<p>If you are in the European Economic Area, the United Kingdom or Switzerland, ads are shown according to your consent choices.</p>
+<h2>4. Third-party services</h2><p>To work, the site loads open-source libraries (such as jsPDF, pdf-lib, PDF.js, QRCode.js and JSZip) from the cdnjs content delivery network, loads fonts from Google Fonts, and is hosted on Cloudflare. The YouTube Thumbnail tool loads public images from YouTube servers. Some tools ask your browser for permission to use your camera, microphone or screen; this data is processed on your device and is not sent to us. These third parties have their own privacy policies.</p>
+<p>We use Google Analytics to understand, in aggregate, how visitors use the site (for example pages viewed and device type). Google Analytics uses cookies and may collect your IP address and browsing information. You can opt out with the <a href="https://tools.google.com/dlpage/gaoptout" target="_blank" rel="noopener">Google Analytics opt-out browser add-on</a>.</p>
+<h2>5. Children's privacy</h2><p>ToolsNest is not directed to children under 13 and we do not knowingly collect personal information from children.</p>
+<h2>6. Your rights</h2><p>Depending on where you live, you may have the right to access, correct or delete personal data we hold about you. Since we collect very little data, please email us and we will help.</p>
+<h2>7. Security</h2><p>Processing files inside your browser keeps your content on your device. No method of transmission or storage is completely secure, so we cannot guarantee absolute security.</p>
+<h2>8. Changes to this policy</h2><p>We may update this policy from time to time. The "Last updated" date above shows the latest version.</p>
+<h2>9. Contact</h2><p>Questions about this policy? Email <a href="mailto:{{MAIL}}">{{MAIL}}</a>.</p>`;

@@ -1,0 +1,12 @@
+# Cloudflare Worker config for ToolsNest
+# IMPORTANT: "name" wahi rakho jo Cloudflare dashboard me tumhare worker ka naam hai,
+# warna Cloudflare naya worker bana dega.
+name = "toolsnest"
+main = "src/index.js"
+compatibility_date = "2025-06-01"
+
+# Custom domain pehle se dashboard me laga hai to neeche wali lines comment hi rehne do.
+# Agar yahin se domain jodna ho to uncomment karo:
+# routes = [
+#   { pattern = "toolsnest.shop", custom_domain = true }
+# ]
